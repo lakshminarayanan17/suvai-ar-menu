@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MenuItem } from "@/types/menu";
+import { generatePlateGLBFromUrl } from "@/lib/glb-generator-client";
 
 interface ARViewerProps {
   menuItems: MenuItem[];
@@ -10,68 +11,121 @@ interface ARViewerProps {
 
 export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [modelViewerLoaded, setModelViewerLoaded] = useState(false);
-  const modelViewerRef = useRef<HTMLElement>(null);
+  const [modelViewerReady, setModelViewerReady] = useState(false);
+  const [modelUrl, setModelUrl] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mvRef = useRef<HTMLElement | null>(null);
   const validItems = menuItems.filter((m) => m.image);
   const currentItem = validItems[currentIndex];
 
-  // Load model-viewer script
+  // Load model-viewer script from CDN
   useEffect(() => {
     if (customElements.get("model-viewer")) {
-      setModelViewerLoaded(true);
+      setModelViewerReady(true);
       return;
     }
 
     const script = document.createElement("script");
     script.type = "module";
-    script.src = "https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js";
+    script.src =
+      "https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js";
     script.onload = () => {
-      setModelViewerLoaded(true);
+      // Wait for custom element to register
+      customElements.whenDefined("model-viewer").then(() => {
+        setModelViewerReady(true);
+      });
     };
     document.head.appendChild(script);
+  }, []);
+
+  // Create model-viewer element imperatively (avoids React custom element issues)
+  useEffect(() => {
+    if (!modelViewerReady || !containerRef.current) return;
+
+    // Only create once
+    if (mvRef.current) return;
+
+    const mv = document.createElement("model-viewer");
+    mv.setAttribute("camera-controls", "");
+    mv.setAttribute("auto-rotate", "");
+    mv.setAttribute("ar", "");
+    mv.setAttribute("ar-modes", "webxr scene-viewer quick-look");
+    mv.setAttribute("ar-scale", "auto");
+    mv.setAttribute("shadow-intensity", "1.2");
+    mv.setAttribute("shadow-softness", "0.8");
+    mv.setAttribute("environment-image", "neutral");
+    mv.setAttribute("exposure", "1.1");
+    mv.setAttribute("camera-orbit", "0deg 65deg auto");
+    mv.setAttribute("min-camera-orbit", "auto auto auto");
+    mv.setAttribute("max-camera-orbit", "auto auto auto");
+    mv.setAttribute("field-of-view", "auto");
+    mv.setAttribute("interaction-prompt", "none");
+    mv.setAttribute("loading", "eager");
+    mv.setAttribute("reveal", "auto");
+    mv.style.cssText =
+      "width:100%;height:100%;position:absolute;inset:0;background:#1a1a1a;z-index:10;";
+
+    containerRef.current.insertBefore(
+      mv,
+      containerRef.current.firstChild
+    );
+    mvRef.current = mv;
 
     return () => {
-      // Don't remove — model-viewer registers a custom element globally
+      if (mv.parentNode) mv.parentNode.removeChild(mv);
+      mvRef.current = null;
+    };
+  }, [modelViewerReady]);
+
+  // Update model-viewer src when modelUrl changes or element is created
+  useEffect(() => {
+    if (mvRef.current && modelUrl) {
+      mvRef.current.setAttribute("src", modelUrl);
+      mvRef.current.setAttribute("alt", currentItem?.name || "Dish");
+    }
+  }, [modelUrl, currentItem?.name, modelViewerReady]);
+
+  // Generate GLB client-side whenever the current item changes
+  const generateModel = useCallback(async (item: MenuItem) => {
+    if (!item.image) return;
+    setGenerating(true);
+    try {
+      const url = await generatePlateGLBFromUrl(item.image);
+      setModelUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    } catch (err) {
+      console.error("GLB generation failed:", err);
+    } finally {
+      setGenerating(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentItem) {
+      generateModel(currentItem);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, currentItem?.id]);
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      setModelUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
     };
   }, []);
 
-  // Get the restaurant ID from the current URL path
-  const getRestaurantId = useCallback(() => {
-    const pathParts = window.location.pathname.split("/");
-    // URL: /menu/[id]
-    const menuIndex = pathParts.indexOf("menu");
-    if (menuIndex !== -1 && pathParts[menuIndex + 1]) {
-      return pathParts[menuIndex + 1];
-    }
-    return null;
-  }, []);
-
-  const getModelUrl = useCallback(
-    (item: MenuItem) => {
-      const restaurantId = getRestaurantId();
-      if (!restaurantId) return "";
-      return `/api/model/${restaurantId}?item=${encodeURIComponent(item.id)}`;
-    },
-    [getRestaurantId]
-  );
-
   const goNext = () => {
-    if (currentIndex < validItems.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    }
+    if (currentIndex < validItems.length - 1) setCurrentIndex(currentIndex + 1);
   };
 
   const goPrev = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
-    }
-  };
-
-  const activateAR = () => {
-    if (modelViewerRef.current) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (modelViewerRef.current as any).activateAR();
-    }
+    if (currentIndex > 0) setCurrentIndex(currentIndex - 1);
   };
 
   if (!validItems.length) {
@@ -83,76 +137,19 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   }
 
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden">
-      {/* model-viewer — handles 3D preview + AR surface placement */}
-      {modelViewerLoaded && currentItem?.image && (
-        <model-viewer
-          ref={modelViewerRef}
-          src={getModelUrl(currentItem)}
-          alt={currentItem.name}
-          ar
-          ar-modes="webxr scene-viewer quick-look"
-          ar-scale="auto"
-          camera-controls
-          auto-rotate
-          shadow-intensity="1"
-          shadow-softness="1"
-          environment-image="neutral"
-          exposure="1"
-          camera-orbit="0deg 65deg 2m"
-          min-camera-orbit="auto auto auto"
-          max-camera-orbit="auto auto auto"
-          field-of-view="30deg"
-          interaction-prompt="auto"
-          style={{
-            width: "100%",
-            height: "100%",
-            position: "absolute",
-            inset: 0,
-            backgroundColor: "#1a1a1a",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ["--poster-color" as any]: "transparent",
-          }}
-        >
-          {/* AR button styled to match app theme */}
-          <button
-            slot="ar-button"
-            onClick={activateAR}
-            style={{
-              position: "absolute",
-              bottom: "180px",
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "rgba(70, 70, 70, 0.6)",
-              backdropFilter: "blur(10px)",
-              WebkitBackdropFilter: "blur(10px)",
-              color: "white",
-              border: "none",
-              borderRadius: "17px",
-              padding: "14px 28px",
-              fontSize: "16px",
-              fontWeight: "600",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              zIndex: 10,
-            }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-            View on Table
-          </button>
-        </model-viewer>
-      )}
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-[#1a1a1a] overflow-hidden"
+    >
+      {/* model-viewer is inserted here imperatively */}
 
       {/* Loading state */}
-      {!modelViewerLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black">
-          <div className="text-white text-lg">Loading AR viewer...</div>
+      {(!modelViewerReady || generating || !modelUrl) && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1a1a] z-[5]">
+          <div className="w-10 h-10 border-2 border-white/30 border-t-white rounded-full animate-spin mb-4" />
+          <p className="text-white/70 text-sm">
+            {generating ? "Generating 3D model..." : "Loading viewer..."}
+          </p>
         </div>
       )}
 
@@ -184,21 +181,31 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       >
         <p
           className="font-signifier text-[24px] text-[#f5f5f5] text-center tracking-[-0.48px] leading-none"
-          style={{ textDecoration: "underline", textDecorationStyle: "wavy", textUnderlineOffset: "4px" }}
+          style={{
+            textDecoration: "underline",
+            textDecorationStyle: "wavy",
+            textUnderlineOffset: "4px",
+          }}
         >
           {restaurantName} Special Menu
         </p>
 
-        {/* Carousel indicators and arrows */}
         <div className="flex items-center justify-between mt-[20px]">
-          {/* Left arrow */}
-          <button onClick={goPrev} className={currentIndex === 0 ? "opacity-30" : ""}>
+          <button
+            onClick={goPrev}
+            className={currentIndex === 0 ? "opacity-30" : ""}
+          >
             <svg width="24" height="17" viewBox="0 0 24 17" fill="none">
-              <path d="M10 1L2 8.5L10 16M2 8.5H22" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path
+                d="M10 1L2 8.5L10 16M2 8.5H22"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           </button>
 
-          {/* Indicators */}
           <div className="flex items-center gap-[15px]">
             {validItems.map((_, i) => (
               <div
@@ -212,10 +219,20 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             ))}
           </div>
 
-          {/* Right arrow */}
-          <button onClick={goNext} className={currentIndex === validItems.length - 1 ? "opacity-30" : ""}>
+          <button
+            onClick={goNext}
+            className={
+              currentIndex === validItems.length - 1 ? "opacity-30" : ""
+            }
+          >
             <svg width="24" height="17" viewBox="0 0 24 17" fill="none">
-              <path d="M14 1L22 8.5L14 16M22 8.5H2" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path
+                d="M14 1L22 8.5L14 16M22 8.5H2"
+                stroke="white"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           </button>
         </div>
