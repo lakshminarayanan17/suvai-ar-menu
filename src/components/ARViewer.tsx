@@ -190,22 +190,32 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Handle tap to place model
+      // Handle tap to place / reposition model
       session.addEventListener("select", () => {
-        if (
-          reticleRef.current?.visible &&
-          foodModelRef.current &&
-          !placedModelRef.current
-        ) {
+        if (reticleRef.current?.visible && foodModelRef.current) {
+          // Remove old placed model if re-tapping
+          if (placedModelRef.current && sceneRef.current) {
+            sceneRef.current.remove(placedModelRef.current);
+          }
+
           const model = foodModelRef.current.clone();
-          model.position.setFromMatrixPosition(reticleRef.current.matrix);
-          // Get rotation from reticle
-          model.quaternion.setFromRotationMatrix(reticleRef.current.matrix);
+
+          // Extract surface position from reticle matrix
+          const pos = new THREE.Vector3();
+          pos.setFromMatrixPosition(reticleRef.current.matrix);
+
+          // Model geometry starts at y=0, so placing at surface Y
+          // makes the plate bottom sit exactly on the surface
+          model.position.copy(pos);
+
+          // Only apply Y rotation from reticle (keep plate upright)
+          const rot = new THREE.Euler();
+          rot.setFromRotationMatrix(reticleRef.current.matrix);
+          model.rotation.set(0, rot.y, 0);
+
           sceneRef.current?.add(model);
           placedModelRef.current = model;
           setPlaced(true);
-          // Hide reticle after placing
-          reticleRef.current.visible = false;
         }
       });
 
@@ -216,8 +226,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — show reticle on surfaces
-        if (hitTestSourceRef.current && !placedModelRef.current) {
+        // Hit test — always show reticle on surfaces (allows repositioning)
+        if (hitTestSourceRef.current) {
           const hitResults = frame.getHitTestResults(
             hitTestSourceRef.current
           );

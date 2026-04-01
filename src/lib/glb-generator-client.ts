@@ -1,5 +1,5 @@
 // Browser-compatible GLB generator
-// Creates a plate with food texture for model-viewer AR
+// Creates a plate with food texture for AR placement
 
 export async function generatePlateGLBFromUrl(
   imageDataUrl: string
@@ -17,9 +17,7 @@ export async function generatePlateGLBFromUrl(
   return URL.createObjectURL(blob);
 }
 
-// ---- Geometry helpers ----
-
-const SEG = 64; // circle segments
+const SEG = 64;
 
 interface Mesh {
   positions: number[];
@@ -28,7 +26,35 @@ interface Mesh {
   indices: number[];
 }
 
-// Creates a solid cylinder with top, bottom, and sides
+// Flat disc — only top face (for textured food top)
+function createDisc(radius: number, y: number): Mesh {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  // Center vertex
+  positions.push(0, y, 0);
+  normals.push(0, 1, 0);
+  uvs.push(0.5, 0.5);
+
+  for (let i = 0; i < SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const x = Math.cos(a) * radius;
+    const z = Math.sin(a) * radius;
+    positions.push(x, y, z);
+    normals.push(0, 1, 0);
+    uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
+  }
+
+  for (let i = 0; i < SEG; i++) {
+    indices.push(0, 1 + i, 1 + ((i + 1) % SEG));
+  }
+
+  return { positions, normals, uvs, indices };
+}
+
+// Cylinder with top, bottom, and sides — NO texture on sides
 function createCylinder(
   radius: number,
   height: number,
@@ -42,70 +68,93 @@ function createCylinder(
   const yTop = yBase + height;
 
   // --- Top face ---
-  const topCenterIdx = 0;
+  const topCenter = 0;
   positions.push(0, yTop, 0);
   normals.push(0, 1, 0);
   uvs.push(0.5, 0.5);
 
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    const x = Math.cos(a) * radius;
-    const z = Math.sin(a) * radius;
-    positions.push(x, yTop, z);
+    positions.push(Math.cos(a) * radius, yTop, Math.sin(a) * radius);
     normals.push(0, 1, 0);
     uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
   }
-
   for (let i = 0; i < SEG; i++) {
-    indices.push(topCenterIdx, topCenterIdx + 1 + i, topCenterIdx + 1 + ((i + 1) % SEG));
+    indices.push(topCenter, topCenter + 1 + i, topCenter + 1 + ((i + 1) % SEG));
   }
 
   // --- Bottom face ---
-  const botCenterIdx = positions.length / 3;
+  const botCenter = positions.length / 3;
   positions.push(0, yBase, 0);
   normals.push(0, -1, 0);
   uvs.push(0.5, 0.5);
 
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    const x = Math.cos(a) * radius;
-    const z = Math.sin(a) * radius;
-    positions.push(x, yBase, z);
+    positions.push(Math.cos(a) * radius, yBase, Math.sin(a) * radius);
     normals.push(0, -1, 0);
     uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
   }
-
   for (let i = 0; i < SEG; i++) {
-    // Reverse winding for bottom
-    indices.push(botCenterIdx, botCenterIdx + 1 + ((i + 1) % SEG), botCenterIdx + 1 + i);
+    indices.push(botCenter, botCenter + 1 + ((i + 1) % SEG), botCenter + 1 + i);
   }
 
-  // --- Side faces ---
+  // --- Sides ---
   const sideBase = positions.length / 3;
   for (let i = 0; i <= SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    const x = Math.cos(a);
-    const z = Math.sin(a);
+    const nx = Math.cos(a);
+    const nz = Math.sin(a);
     const u = i / SEG;
 
-    // Top ring vertex
-    positions.push(x * radius, yTop, z * radius);
-    normals.push(x, 0, z);
+    positions.push(nx * radius, yTop, nz * radius);
+    normals.push(nx, 0, nz);
     uvs.push(u, 1);
 
-    // Bottom ring vertex
-    positions.push(x * radius, yBase, z * radius);
-    normals.push(x, 0, z);
+    positions.push(nx * radius, yBase, nz * radius);
+    normals.push(nx, 0, nz);
     uvs.push(u, 0);
   }
-
   for (let i = 0; i < SEG; i++) {
     const a = sideBase + i * 2;
-    const b = a + 1;
-    const c = a + 2;
-    const d = a + 3;
-    indices.push(a, b, c);
-    indices.push(c, b, d);
+    indices.push(a, a + 1, a + 2);
+    indices.push(a + 2, a + 1, a + 3);
+  }
+
+  return { positions, normals, uvs, indices };
+}
+
+// Thin rim (side wall only) — for food edge
+function createRim(
+  radius: number,
+  height: number,
+  yBase: number
+): Mesh {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const yTop = yBase + height;
+
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const nx = Math.cos(a);
+    const nz = Math.sin(a);
+    const u = i / SEG;
+
+    positions.push(nx * radius, yTop, nz * radius);
+    normals.push(nx, 0, nz);
+    uvs.push(u, 1);
+
+    positions.push(nx * radius, yBase, nz * radius);
+    normals.push(nx, 0, nz);
+    uvs.push(u, 0);
+  }
+  for (let i = 0; i < SEG; i++) {
+    const a = i * 2;
+    indices.push(a, a + 1, a + 2);
+    indices.push(a + 2, a + 1, a + 3);
   }
 
   return { positions, normals, uvs, indices };
@@ -126,24 +175,26 @@ function computeBounds(positions: number[]) {
 // ---- GLB Builder ----
 
 function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
-  // Create geometry
-  // Plate outer ring: 30cm diameter, 1.5cm tall
-  const plateOuter = createCylinder(0.15, 0.015, 0);
-  // Plate inner: 24cm diameter, sits slightly above, 0.5cm
-  const plateInner = createCylinder(0.12, 0.005, 0.015);
-  // Food mound: 18cm diameter, 3cm tall dome on plate
-  const food = createCylinder(0.09, 0.03, 0.02);
+  // All geometry starts at y=0 (bottom of plate sits on surface)
+  //
+  // Plate outer ring:  r=0.15, h=0.012, y=0       (terracotta)
+  // Plate inner disc:  r=0.12, h=0.004, y=0.012    (cream/white)
+  // Food edge rim:     r=0.09, h=0.008, y=0.016    (dark brown — sides only)
+  // Food top disc:     r=0.09, y=0.024              (textured — top only)
 
-  const meshes = [plateOuter, plateInner, food];
+  const plateOuter = createCylinder(0.15, 0.012, 0);
+  const plateInner = createCylinder(0.12, 0.004, 0.012);
+  const foodRim = createRim(0.09, 0.008, 0.016);
+  const foodTop = createDisc(0.09, 0.024);
 
-  // Pack all mesh data into a single binary buffer
-  // Layout per mesh: positions | normals | uvs | indices (each 4-byte aligned)
+  // 4 meshes → 4 primitives → 4 materials
+  const meshes = [plateOuter, plateInner, foodRim, foodTop];
+
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
   let totalBinSize = 0;
 
-  for (let m = 0; m < meshes.length; m++) {
-    const mesh = meshes[m];
+  for (const mesh of meshes) {
     const vertCount = mesh.positions.length / 3;
     const idxCount = mesh.indices.length;
     const bounds = computeBounds(mesh.positions);
@@ -158,11 +209,8 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     bufferViews.push({ byteOffset: totalBinSize, byteLength: posBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
-      componentType: 5126,
-      count: vertCount,
-      type: "VEC3",
-      max: bounds.max,
-      min: bounds.min,
+      componentType: 5126, count: vertCount, type: "VEC3",
+      max: bounds.max, min: bounds.min,
     });
     totalBinSize += posBytes;
 
@@ -170,9 +218,7 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     bufferViews.push({ byteOffset: totalBinSize, byteLength: normBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
-      componentType: 5126,
-      count: vertCount,
-      type: "VEC3",
+      componentType: 5126, count: vertCount, type: "VEC3",
     });
     totalBinSize += normBytes;
 
@@ -180,9 +226,7 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     bufferViews.push({ byteOffset: totalBinSize, byteLength: uvBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
-      componentType: 5126,
-      count: vertCount,
-      type: "VEC2",
+      componentType: 5126, count: vertCount, type: "VEC2",
     });
     totalBinSize += uvBytes;
 
@@ -190,23 +234,19 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     bufferViews.push({ byteOffset: totalBinSize, byteLength: idxBytes + idxPad, target: 34963 });
     accessors.push({
       bufferView: bufferViews.length - 1,
-      componentType: 5123,
-      count: idxCount,
-      type: "SCALAR",
+      componentType: 5123, count: idxCount, type: "SCALAR",
     });
     totalBinSize += idxBytes + idxPad;
   }
 
-  // Image bufferView (no target)
+  // Image bufferView
   const imageViewIndex = bufferViews.length;
   bufferViews.push({ byteOffset: totalBinSize, byteLength: imageBytes.byteLength, target: 0 });
   totalBinSize += imageBytes.byteLength;
 
-  // Pad total to 4 bytes
   const binPad = (4 - (totalBinSize % 4)) % 4;
   const paddedBinSize = totalBinSize + binPad;
 
-  // Build glTF JSON
   const gltf = {
     asset: { version: "2.0", generator: "Suvai AR Menu" },
     scene: 0,
@@ -226,24 +266,36 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
       },
     ],
     materials: [
+      // 0: Plate outer — terracotta
       {
         name: "PlateOuter",
         pbrMetallicRoughness: {
-          baseColorFactor: [0.76, 0.52, 0.3, 1.0],
-          metallicFactor: 0.1,
-          roughnessFactor: 0.6,
+          baseColorFactor: [0.72, 0.48, 0.28, 1.0],
+          metallicFactor: 0.05,
+          roughnessFactor: 0.7,
         },
       },
+      // 1: Plate inner — cream white
       {
         name: "PlateInner",
         pbrMetallicRoughness: {
-          baseColorFactor: [0.96, 0.94, 0.90, 1.0],
-          metallicFactor: 0.05,
-          roughnessFactor: 0.8,
+          baseColorFactor: [0.95, 0.93, 0.89, 1.0],
+          metallicFactor: 0.02,
+          roughnessFactor: 0.85,
         },
       },
+      // 2: Food rim/edge — dark brown (no texture!)
       {
-        name: "Food",
+        name: "FoodEdge",
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.45, 0.30, 0.15, 1.0],
+          metallicFactor: 0.0,
+          roughnessFactor: 0.95,
+        },
+      },
+      // 3: Food top — TEXTURED with the dish image
+      {
+        name: "FoodTop",
         pbrMetallicRoughness: {
           baseColorTexture: { index: 0 },
           metallicFactor: 0.0,
@@ -270,7 +322,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   const gltfPad = (4 - (gltfBytes.byteLength % 4)) % 4;
   const paddedGltfLen = gltfBytes.byteLength + gltfPad;
 
-  // Assemble GLB
   const glbSize = 12 + 8 + paddedGltfLen + 8 + paddedBinSize;
   const out = new ArrayBuffer(glbSize);
   const dv = new DataView(out);
@@ -278,39 +329,32 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   let off = 0;
 
   // Header
-  dv.setUint32(off, 0x46546c67, true); off += 4; // glTF
-  dv.setUint32(off, 2, true); off += 4;           // version
-  dv.setUint32(off, glbSize, true); off += 4;     // length
+  dv.setUint32(off, 0x46546c67, true); off += 4;
+  dv.setUint32(off, 2, true); off += 4;
+  dv.setUint32(off, glbSize, true); off += 4;
 
   // JSON chunk
   dv.setUint32(off, paddedGltfLen, true); off += 4;
-  dv.setUint32(off, 0x4e4f534a, true); off += 4; // JSON
+  dv.setUint32(off, 0x4e4f534a, true); off += 4;
   u8.set(gltfBytes, off); off += gltfBytes.byteLength;
   for (let i = 0; i < gltfPad; i++) u8[off++] = 0x20;
 
-  // BIN chunk header
+  // BIN chunk
   dv.setUint32(off, paddedBinSize, true); off += 4;
-  dv.setUint32(off, 0x004e4942, true); off += 4; // BIN\0
+  dv.setUint32(off, 0x004e4942, true); off += 4;
 
-  // Write mesh binary data
+  // Write mesh data
   for (const mesh of meshes) {
-    // Positions
     for (const v of mesh.positions) { dv.setFloat32(off, v, true); off += 4; }
-    // Normals
     for (const v of mesh.normals) { dv.setFloat32(off, v, true); off += 4; }
-    // UVs
     for (const v of mesh.uvs) { dv.setFloat32(off, v, true); off += 4; }
-    // Indices
     for (const idx of mesh.indices) { dv.setUint16(off, idx, true); off += 2; }
-    // Pad indices to 4 bytes
     const idxPad = (4 - ((mesh.indices.length * 2) % 4)) % 4;
     for (let i = 0; i < idxPad; i++) u8[off++] = 0;
   }
 
   // Image data
   u8.set(imageBytes, off); off += imageBytes.byteLength;
-
-  // Padding
   for (let i = 0; i < binPad; i++) u8[off++] = 0;
 
   return out;
