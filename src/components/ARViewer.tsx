@@ -190,14 +190,11 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const model = foodModelRef.current.clone();
-              const pos = new THREE.Vector3();
-              const mat = new THREE.Matrix4().fromArray(pose.transform.matrix);
-              pos.setFromMatrixPosition(mat);
-              model.position.copy(pos);
-
-              const rot = new THREE.Euler();
-              rot.setFromRotationMatrix(mat);
-              model.rotation.set(0, rot.y, 0);
+              // Place model exactly at the detected surface
+              const p = pose.transform.position;
+              model.position.set(p.x, p.y, p.z);
+              // Only apply Y rotation so model stays upright on surface
+              model.rotation.set(0, 0, 0);
 
               scene.add(model);
               placedModelRef.current = model;

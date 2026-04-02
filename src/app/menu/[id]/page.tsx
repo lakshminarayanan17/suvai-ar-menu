@@ -55,13 +55,21 @@ export default function CustomerMenuPage() {
     );
   }
 
-  if (!restaurant) {
+  if (!restaurant || restaurant.menuItems.length === 0) {
     return (
       <div className="h-screen w-full flex flex-col items-center justify-center bg-black text-white p-8 text-center">
-        <h1 className="text-2xl font-signifier mb-4">Menu Not Found</h1>
-        <p className="text-[rgba(255,255,255,0.7)]">
-          This restaurant menu is not available. Please scan the QR code again.
+        <h1 className="text-2xl font-signifier mb-4">Menu Not Available</h1>
+        <p className="text-[rgba(255,255,255,0.7)] mb-4">
+          {!restaurant
+            ? "Could not load the menu. Ask the restaurant to sync their menu."
+            : "No menu items with images found. The restaurant needs to add items first."}
         </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="bg-white/10 border border-white/20 rounded-full px-6 py-3 text-white text-sm"
+        >
+          Retry
+        </button>
       </div>
     );
   }
