@@ -13,11 +13,11 @@ interface ARViewerProps {
 
 export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [arSupported, setArSupported] = useState<boolean | null>(null);
   const [arActive, setArActive] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [placed, setPlaced] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [arStatus, setArStatus] = useState<string>("");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -26,53 +26,33 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sessionRef = useRef<XRSession | null>(null);
   const hitTestSourceRef = useRef<XRHitTestSource | null>(null);
-  const reticleRef = useRef<THREE.Mesh | null>(null);
   const foodModelRef = useRef<THREE.Group | null>(null);
   const placedModelRef = useRef<THREE.Group | null>(null);
   const modelBlobUrlRef = useRef<string | null>(null);
-  const rafIdRef = useRef<number | null>(null);
 
   const validItems = menuItems.filter((m) => m.image);
   const currentItem = validItems[currentIndex];
-
-  // Check WebXR AR support
-  useEffect(() => {
-    if (navigator.xr) {
-      navigator.xr
-        .isSessionSupported("immersive-ar")
-        .then((supported) => setArSupported(supported))
-        .catch(() => setArSupported(false));
-    } else {
-      setArSupported(false);
-    }
-  }, []);
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem) => {
     if (!item.image) return;
     setModelReady(false);
     try {
-      // Revoke old URL
       if (modelBlobUrlRef.current) {
         URL.revokeObjectURL(modelBlobUrlRef.current);
       }
       const url = await generatePlateGLBFromUrl(item.image);
       modelBlobUrlRef.current = url;
 
-      // Load into Three.js
       const loader = new GLTFLoader();
       loader.load(url, (gltf) => {
         const model = gltf.scene;
-        model.scale.set(1, 1, 1);
-
-        // Enable shadows on all meshes
         model.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true;
             child.receiveShadow = true;
           }
         });
-
         foodModelRef.current = model;
         setModelReady(true);
       });
@@ -82,30 +62,59 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     }
   }, []);
 
+  // Generate model on mount and when item changes
   useEffect(() => {
     if (currentItem) {
-      setPlaced(false);
-      // Remove old placed model
-      if (placedModelRef.current && sceneRef.current) {
-        sceneRef.current.remove(placedModelRef.current);
-        placedModelRef.current = null;
-      }
       generateModel(currentItem);
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // Initialize Three.js scene + WebXR
-  const startAR = useCallback(async () => {
-    if (!containerRef.current || !navigator.xr) return;
+  // When model changes during AR, swap the placed model
+  useEffect(() => {
+    if (arActive && placed && foodModelRef.current && placedModelRef.current && sceneRef.current) {
+      const oldPos = placedModelRef.current.position.clone();
+      const oldRot = placedModelRef.current.rotation.clone();
+      sceneRef.current.remove(placedModelRef.current);
 
-    // Create canvas
+      const newModel = foodModelRef.current.clone();
+      newModel.position.copy(oldPos);
+      newModel.rotation.copy(oldRot);
+      sceneRef.current.add(newModel);
+      placedModelRef.current = newModel;
+    }
+  }, [modelReady, arActive, placed]);
+
+  // Start AR session
+  const startAR = useCallback(async () => {
+    setError(null);
+    setArStatus("Starting AR...");
+
+    if (!navigator.xr) {
+      setError("AR is not supported on this browser. Use Chrome on Android.");
+      setArStatus("");
+      return;
+    }
+
+    try {
+      const supported = await navigator.xr.isSessionSupported("immersive-ar");
+      if (!supported) {
+        setError("AR not supported on this device. Needs ARCore + Chrome.");
+        setArStatus("");
+        return;
+      }
+    } catch {
+      setError("Could not check AR support. Try Chrome on Android.");
+      setArStatus("");
+      return;
+    }
+
+    if (!containerRef.current) return;
+
     const canvas = document.createElement("canvas");
-    canvas.style.cssText =
-      "position:absolute;inset:0;width:100%;height:100%;z-index:0;";
+    canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;z-index:0;";
     containerRef.current.insertBefore(canvas, containerRef.current.firstChild);
     canvasRef.current = canvas;
 
-    // Renderer — high quality settings
     const renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
@@ -113,10 +122,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       powerPreference: "high-performance",
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(
-      containerRef.current.clientWidth,
-      containerRef.current.clientHeight
-    );
+    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
     renderer.xr.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
@@ -124,55 +130,24 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
 
-    // Scene
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    // Camera — WebXR will override this
-    const camera = new THREE.PerspectiveCamera(
-      70,
-      containerRef.current.clientWidth / containerRef.current.clientHeight,
-      0.01,
-      20
-    );
+    const camera = new THREE.PerspectiveCamera(70, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.01, 20);
     cameraRef.current = camera;
 
-    // Lighting — bright and clear for food presentation
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-    scene.add(ambientLight);
-
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 1.0));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(1, 3, 2);
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    dirLight.shadow.camera.near = 0.1;
-    dirLight.shadow.camera.far = 10;
+    dirLight.shadow.mapSize.set(1024, 1024);
     scene.add(dirLight);
-
-    // Fill light from the other side
     const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
     fillLight.position.set(-2, 2, -1);
     scene.add(fillLight);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.8));
 
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
-    scene.add(hemiLight);
-
-    // Reticle — ring shown on detected surfaces before placement
-    const reticleGeo = new THREE.RingGeometry(0.08, 0.1, 32).rotateX(
-      -Math.PI / 2
-    );
-    const reticleMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      side: THREE.DoubleSide,
-    });
-    const reticle = new THREE.Mesh(reticleGeo, reticleMat);
-    reticle.visible = false;
-    reticle.matrixAutoUpdate = false;
-    scene.add(reticle);
-    reticleRef.current = reticle;
-
-    // Request WebXR immersive-ar session
     try {
       const session = await navigator.xr!.requestSession("immersive-ar", {
         requiredFeatures: ["hit-test"],
@@ -184,79 +159,55 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       renderer.xr.setReferenceSpaceType("local");
       await renderer.xr.setSession(session);
       setArActive(true);
+      setArStatus("Point your phone at a table or flat surface");
 
-      // Set up hit-test source
       const refSpace = await session.requestReferenceSpace("viewer");
-      const hitTestSource = await session.requestHitTestSource!({
-        space: refSpace,
-      });
+      const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
       hitTestSourceRef.current = hitTestSource ?? null;
 
-      // Handle session end
       session.addEventListener("end", () => {
         setArActive(false);
         hitTestSourceRef.current = null;
         sessionRef.current = null;
-
-        // Clean up
-        if (canvasRef.current?.parentNode) {
-          canvasRef.current.parentNode.removeChild(canvasRef.current);
-        }
+        if (canvasRef.current?.parentNode) canvasRef.current.parentNode.removeChild(canvasRef.current);
         rendererRef.current?.dispose();
         rendererRef.current = null;
       });
 
-      // Handle tap to place model (one time only)
-      session.addEventListener("select", () => {
-        if (
-          reticleRef.current?.visible &&
-          foodModelRef.current &&
-          !placedModelRef.current
-        ) {
-          const model = foodModelRef.current.clone();
+      // Auto-place flag
+      let autoPlaced = false;
 
-          // Extract surface position from reticle matrix
-          const pos = new THREE.Vector3();
-          pos.setFromMatrixPosition(reticleRef.current.matrix);
-          model.position.copy(pos);
-
-          // Only apply Y rotation (keep plate flat on surface)
-          const rot = new THREE.Euler();
-          rot.setFromRotationMatrix(reticleRef.current.matrix);
-          model.rotation.set(0, rot.y, 0);
-
-          sceneRef.current?.add(model);
-          placedModelRef.current = model;
-          setPlaced(true);
-
-          // Hide reticle permanently after placement
-          reticleRef.current.visible = false;
-          // Stop hit testing to save performance
-          hitTestSourceRef.current = null;
-        }
-      });
-
-      // Render loop
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
-
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — only show reticle before placement
-        if (hitTestSourceRef.current && !placedModelRef.current) {
-          const hitResults = frame.getHitTestResults(
-            hitTestSourceRef.current
-          );
-          if (hitResults.length > 0) {
+        // Hit test — auto-place on first surface detected
+        if (hitTestSourceRef.current && !autoPlaced) {
+          const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
+          if (hitResults.length > 0 && foodModelRef.current) {
             const hit = hitResults[0];
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
-              reticle.visible = true;
-              reticle.matrix.fromArray(pose.transform.matrix);
+              const model = foodModelRef.current.clone();
+              const pos = new THREE.Vector3();
+              const mat = new THREE.Matrix4().fromArray(pose.transform.matrix);
+              pos.setFromMatrixPosition(mat);
+              model.position.copy(pos);
+
+              const rot = new THREE.Euler();
+              rot.setFromRotationMatrix(mat);
+              model.rotation.set(0, rot.y, 0);
+
+              scene.add(model);
+              placedModelRef.current = model;
+              autoPlaced = true;
+              setPlaced(true);
+              setArStatus("");
+
+              // Stop hit testing
+              hitTestSourceRef.current = null;
             }
-          } else {
-            reticle.visible = false;
           }
         }
 
@@ -264,46 +215,23 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       });
     } catch (err) {
       console.error("WebXR session failed:", err);
-      setError(`AR failed: ${err}`);
-      setArSupported(false);
+      setError(`AR failed: ${err instanceof Error ? err.message : String(err)}`);
+      setArStatus("");
     }
   }, []);
 
-  // Cleanup on unmount
+  // Cleanup
   useEffect(() => {
     return () => {
-      if (sessionRef.current) {
-        sessionRef.current.end().catch(() => {});
-      }
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-      if (modelBlobUrlRef.current) {
-        URL.revokeObjectURL(modelBlobUrlRef.current);
-      }
+      sessionRef.current?.end().catch(() => {});
+      modelBlobUrlRef.current && URL.revokeObjectURL(modelBlobUrlRef.current);
       rendererRef.current?.dispose();
     };
   }, []);
 
-  // Replace placed model when switching items during AR
-  useEffect(() => {
-    if (arActive && placed && foodModelRef.current && placedModelRef.current && sceneRef.current) {
-      const oldPos = placedModelRef.current.position.clone();
-      const oldQuat = placedModelRef.current.quaternion.clone();
-      sceneRef.current.remove(placedModelRef.current);
-
-      const newModel = foodModelRef.current.clone();
-      newModel.position.copy(oldPos);
-      newModel.quaternion.copy(oldQuat);
-      sceneRef.current.add(newModel);
-      placedModelRef.current = newModel;
-    }
-  }, [modelReady, arActive, placed]);
-
   const goNext = () => {
     if (currentIndex < validItems.length - 1) setCurrentIndex(currentIndex + 1);
   };
-
   const goPrev = () => {
     if (currentIndex > 0) setCurrentIndex(currentIndex - 1);
   };
@@ -312,187 +240,113 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     return (
       <div className="h-full flex flex-col items-center justify-center bg-black text-white text-center p-8">
         <p className="text-xl mb-4">No menu items available yet.</p>
-        <p className="text-white/50 text-sm">
-          Add menu items with images on the owner dashboard first, then scan the QR code.
-        </p>
-        <p className="text-white/30 text-xs mt-4">
-          Total items: {menuItems.length}, With images: {menuItems.filter(m => m.image).length}
-        </p>
+        <p className="text-white/50 text-sm">Add menu items with images on the owner dashboard first.</p>
       </div>
     );
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="relative w-full h-full bg-black overflow-hidden"
-    >
-      {/* Pre-AR: show prompt to start */}
-      {!arActive && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center z-[5] bg-black">
-          {/* Food image preview */}
-          {currentItem?.image && (
-            <div className="w-[200px] h-[200px] rounded-full overflow-hidden mb-6 border-4 border-white/20">
-              <img
-                src={currentItem.image}
-                alt={currentItem.name}
-                className="w-full h-full object-cover"
-              />
-            </div>
-          )}
+    <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
 
-          <h2 className="font-signifier text-[28px] text-white mb-2">
+      {/* Single tap to launch AR — only shown before AR starts */}
+      {!arActive && (
+        <button
+          onClick={startAR}
+          disabled={!modelReady}
+          className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black w-full"
+        >
+          {currentItem?.image && (
+            <img
+              src={currentItem.image}
+              alt={currentItem.name}
+              className="w-[200px] h-[200px] rounded-full object-cover border-4 border-white/20 mb-6"
+            />
+          )}
+          <h2 className="font-signifier text-[24px] text-white mb-1">
             {currentItem?.name}
           </h2>
-          <p className="text-white/70 text-center px-8 mb-8 text-[15px]">
-            {currentItem?.description}
+          <p className="text-white/50 text-[14px] mb-6 px-8 text-center">{currentItem?.description}</p>
+
+          <div className={`rounded-full px-8 py-4 flex items-center gap-3 ${modelReady ? "bg-white" : "bg-white/30"}`}>
+            {!modelReady && (
+              <svg className="animate-spin h-5 w-5 text-black" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            )}
+            <span className={`font-semibold text-[16px] ${modelReady ? "text-black" : "text-black/50"}`}>
+              {modelReady ? "View in AR" : "Preparing 3D model..."}
+            </span>
+          </div>
+          <p className="text-white/40 text-[12px] mt-3">
+            {modelReady ? "Tap the button to open your camera" : ""}
           </p>
 
-          {arSupported === null && (
-            <p className="text-white/50 text-sm">Checking AR support...</p>
+          {error && (
+            <div className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mt-4 mx-6">
+              <p className="text-red-300 text-[13px]">{error}</p>
+            </div>
           )}
+        </button>
+      )}
 
-          {arSupported === true && (
-            <button
-              onClick={startAR}
-              disabled={!modelReady}
-              className="bg-white text-black font-semibold rounded-full px-8 py-4 text-[16px] flex items-center gap-3 disabled:opacity-50"
+      {/* AR UI overlay */}
+      {arActive && (
+        <>
+          {/* Status message — shown while looking for surface */}
+          {arStatus && (
+            <div
+              className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] rounded-full px-6 py-3"
+              style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
             >
-              <svg
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
-              {modelReady ? "View on Your Table" : "Loading 3D Model..."}
-            </button>
-          )}
-
-          {arSupported === false && (
-            <div className="text-center px-8">
-              <p className="text-red-400 text-sm mb-2">
-                AR not supported on this device
-              </p>
-              <p className="text-white/50 text-xs">
-                Use Chrome on an ARCore-compatible Android device
-              </p>
+              <p className="text-white text-[15px] font-medium whitespace-nowrap">{arStatus}</p>
             </div>
           )}
 
-          {error && (
-            <p className="text-red-400 text-xs mt-4 px-8 text-center">{error}</p>
-          )}
-        </div>
-      )}
-
-      {/* AR overlay UI — shown during AR session via DOM overlay */}
-      {arActive && (
-        <>
-          {/* Top info card */}
+          {/* Top info — only show after model is placed */}
+          {placed && (
           <div
-            className="absolute top-[60px] left-[12px] right-[12px] rounded-[17px] overflow-hidden p-[16px] z-[30]"
-            style={{
-              background: "rgba(70, 70, 70, 0.5)",
-              backdropFilter: "blur(10px)",
-              WebkitBackdropFilter: "blur(10px)",
-            }}
+            className="absolute top-[60px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
+            style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
           >
-            <h2 className="font-signifier text-[22px] text-[#f5f5f5] leading-none">
+            <h2 className="font-signifier text-[22px] text-white leading-none">
               {currentItem?.name}
             </h2>
-            <p className="text-[14px] text-[rgba(255,255,255,0.85)] leading-[1.3] mt-[8px]">
+            <p className="text-[14px] text-white/80 leading-[1.3] mt-[8px]">
               {currentItem?.description}
             </p>
           </div>
-
-          {/* Placement instruction */}
-          {!placed && (
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[30]">
-              <p
-                className="text-white text-[16px] font-medium px-6 py-3 rounded-full"
-                style={{
-                  background: "rgba(0,0,0,0.6)",
-                  backdropFilter: "blur(8px)",
-                }}
-              >
-                Point at a surface, then tap to place
-              </p>
-            </div>
           )}
 
-          {/* Bottom navigation */}
-          <div
-            className="absolute bottom-[40px] left-[12px] right-[12px] rounded-[17px] overflow-hidden p-[16px] z-[30]"
-            style={{
-              background: "rgba(70, 70, 70, 0.5)",
-              backdropFilter: "blur(10px)",
-              WebkitBackdropFilter: "blur(10px)",
-            }}
+          {/* Bottom nav — only show after model is placed */}
+          {placed && <div
+            className="absolute bottom-[40px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
+            style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
           >
             <p
-              className="font-signifier text-[20px] text-[#f5f5f5] text-center tracking-[-0.4px] leading-none"
-              style={{
-                textDecoration: "underline",
-                textDecorationStyle: "wavy",
-                textUnderlineOffset: "4px",
-              }}
+              className="font-signifier text-[20px] text-white text-center leading-none"
+              style={{ textDecoration: "underline", textDecorationStyle: "wavy", textUnderlineOffset: "4px" }}
             >
               {restaurantName} Special Menu
             </p>
-
             <div className="flex items-center justify-between mt-[16px]">
-              <button
-                onClick={goPrev}
-                className={currentIndex === 0 ? "opacity-30" : ""}
-              >
+              <button onClick={goPrev} className={currentIndex === 0 ? "opacity-30" : ""}>
                 <svg width="24" height="17" viewBox="0 0 24 17" fill="none">
-                  <path
-                    d="M10 1L2 8.5L10 16M2 8.5H22"
-                    stroke="white"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                  <path d="M10 1L2 8.5L10 16M2 8.5H22" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
-
               <div className="flex items-center gap-[12px]">
                 {validItems.map((_, i) => (
-                  <div
-                    key={i}
-                    className={`w-[2px] rounded-full transition-all ${
-                      i === currentIndex
-                        ? "h-[19px] bg-white shadow-[0px_4px_4px_rgba(0,0,0,0.25)]"
-                        : "h-[11px] bg-[rgba(255,255,255,0.37)]"
-                    }`}
-                  />
+                  <div key={i} className={`w-[2px] rounded-full transition-all ${i === currentIndex ? "h-[19px] bg-white" : "h-[11px] bg-white/40"}`} />
                 ))}
               </div>
-
-              <button
-                onClick={goNext}
-                className={
-                  currentIndex === validItems.length - 1 ? "opacity-30" : ""
-                }
-              >
+              <button onClick={goNext} className={currentIndex === validItems.length - 1 ? "opacity-30" : ""}>
                 <svg width="24" height="17" viewBox="0 0 24 17" fill="none">
-                  <path
-                    d="M14 1L22 8.5L14 16M22 8.5H2"
-                    stroke="white"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                  <path d="M14 1L22 8.5L14 16M22 8.5H2" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
             </div>
-          </div>
+          </div>}
         </>
       )}
     </div>
