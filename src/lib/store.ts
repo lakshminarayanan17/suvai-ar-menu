@@ -60,13 +60,31 @@ export function getMenuItemById(id: string): MenuItem | undefined {
 
 async function syncToServer(restaurant: Restaurant) {
   try {
-    await fetch("/api/restaurant", {
+    const res = await fetch("/api/restaurant", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(restaurant),
     });
+    if (!res.ok) {
+      console.error("Server sync failed:", res.status);
+    }
+  } catch (err) {
+    console.error("Server sync error:", err);
+  }
+}
+
+// Force sync — returns true if successful
+export async function forceSyncToServer(): Promise<boolean> {
+  const restaurant = getRestaurant();
+  try {
+    const res = await fetch("/api/restaurant", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(restaurant),
+    });
+    return res.ok;
   } catch {
-    // Silently fail — localStorage is the primary store
+    return false;
   }
 }
 

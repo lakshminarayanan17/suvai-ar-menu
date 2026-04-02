@@ -1,50 +1,37 @@
 import { Restaurant } from "@/types/menu";
-import { put, list, del } from "@vercel/blob";
+import * as fs from "fs";
+import * as path from "path";
 
-const BLOB_PREFIX = "suvai-restaurant-";
+const DATA_DIR = "/tmp/suvai-data";
 
-// Fallback in-memory store for local dev without Vercel Blob token
-const memoryStore = new Map<string, Restaurant>();
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
 
-function hasBlob(): boolean {
-  return !!process.env.BLOB_READ_WRITE_TOKEN;
+function filePath(id: string): string {
+  // Sanitize id to prevent path traversal
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
+  return path.join(DATA_DIR, `${safe}.json`);
 }
 
 export async function getRestaurantById(
   id: string
 ): Promise<Restaurant | null> {
-  if (hasBlob()) {
-    try {
-      const { blobs } = await list({ prefix: `${BLOB_PREFIX}${id}` });
-      if (blobs.length === 0) return null;
-      const res = await fetch(blobs[0].url);
-      return (await res.json()) as Restaurant;
-    } catch {
-      return null;
-    }
+  ensureDir();
+  const fp = filePath(id);
+  if (!fs.existsSync(fp)) return null;
+  try {
+    const data = fs.readFileSync(fp, "utf-8");
+    return JSON.parse(data) as Restaurant;
+  } catch {
+    return null;
   }
-  return memoryStore.get(id) || null;
 }
 
 export async function saveRestaurant(restaurant: Restaurant): Promise<void> {
-  if (hasBlob()) {
-    // Delete old blob first
-    const { blobs } = await list({
-      prefix: `${BLOB_PREFIX}${restaurant.id}`,
-    });
-    for (const blob of blobs) {
-      await del(blob.url);
-    }
-    // Save new
-    await put(
-      `${BLOB_PREFIX}${restaurant.id}.json`,
-      JSON.stringify(restaurant),
-      {
-        access: "public",
-        contentType: "application/json",
-      }
-    );
-  } else {
-    memoryStore.set(restaurant.id, restaurant);
-  }
+  ensureDir();
+  const fp = filePath(restaurant.id);
+  fs.writeFileSync(fp, JSON.stringify(restaurant), "utf-8");
 }
