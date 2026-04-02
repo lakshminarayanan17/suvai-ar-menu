@@ -290,8 +290,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             </div>
           )}
 
-          {/* Top info — only show after model is placed */}
-          {placed && (
+          {/* Top info — always visible during AR */}
           <div
             className="absolute top-[60px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
             style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
@@ -303,10 +302,9 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
               {currentItem?.description}
             </p>
           </div>
-          )}
 
-          {/* Bottom nav — only show after model is placed */}
-          {placed && <div
+          {/* Bottom nav — always visible during AR */}
+          <div
             className="absolute bottom-[40px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
             style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
           >
@@ -333,7 +331,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 </svg>
               </button>
             </div>
-          </div>}
+          </div>
         </>
       )}
     </div>
