@@ -103,18 +103,23 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     containerRef.current.insertBefore(canvas, containerRef.current.firstChild);
     canvasRef.current = canvas;
 
-    // Renderer
+    // Renderer — high quality settings
     const renderer = new THREE.WebGLRenderer({
       canvas,
       alpha: true,
       antialias: true,
+      powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(
       containerRef.current.clientWidth,
       containerRef.current.clientHeight
     );
     renderer.xr.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
 
     // Scene
@@ -130,16 +135,25 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     );
     cameraRef.current = camera;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    // Lighting — bright and clear for food presentation
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(2, 4, 2);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    dirLight.position.set(1, 3, 2);
     dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    dirLight.shadow.camera.near = 0.1;
+    dirLight.shadow.camera.far = 10;
     scene.add(dirLight);
 
-    const hemiLight = new THREE.HemisphereLight(0xffeeb1, 0x080820, 0.6);
+    // Fill light from the other side
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    fillLight.position.set(-2, 2, -1);
+    scene.add(fillLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
     scene.add(hemiLight);
 
     // Reticle — ring shown on detected surfaces before placement
@@ -190,25 +204,21 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Handle tap to place / reposition model
+      // Handle tap to place model (one time only)
       session.addEventListener("select", () => {
-        if (reticleRef.current?.visible && foodModelRef.current) {
-          // Remove old placed model if re-tapping
-          if (placedModelRef.current && sceneRef.current) {
-            sceneRef.current.remove(placedModelRef.current);
-          }
-
+        if (
+          reticleRef.current?.visible &&
+          foodModelRef.current &&
+          !placedModelRef.current
+        ) {
           const model = foodModelRef.current.clone();
 
           // Extract surface position from reticle matrix
           const pos = new THREE.Vector3();
           pos.setFromMatrixPosition(reticleRef.current.matrix);
-
-          // Model geometry starts at y=0, so placing at surface Y
-          // makes the plate bottom sit exactly on the surface
           model.position.copy(pos);
 
-          // Only apply Y rotation from reticle (keep plate upright)
+          // Only apply Y rotation (keep plate flat on surface)
           const rot = new THREE.Euler();
           rot.setFromRotationMatrix(reticleRef.current.matrix);
           model.rotation.set(0, rot.y, 0);
@@ -216,6 +226,11 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           sceneRef.current?.add(model);
           placedModelRef.current = model;
           setPlaced(true);
+
+          // Hide reticle permanently after placement
+          reticleRef.current.visible = false;
+          // Stop hit testing to save performance
+          hitTestSourceRef.current = null;
         }
       });
 
@@ -226,8 +241,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — always show reticle on surfaces (allows repositioning)
-        if (hitTestSourceRef.current) {
+        // Hit test — only show reticle before placement
+        if (hitTestSourceRef.current && !placedModelRef.current) {
           const hitResults = frame.getHitTestResults(
             hitTestSourceRef.current
           );
