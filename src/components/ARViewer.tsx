@@ -159,7 +159,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       renderer.xr.setReferenceSpaceType("local");
       await renderer.xr.setSession(session);
       setArActive(true);
-      setArStatus("Point your phone at a table or flat surface");
+      setArStatus("Slowly move your phone around...");
 
       const refSpace = await session.requestReferenceSpace("viewer");
       const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
@@ -248,46 +248,33 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
 
-      {/* Single tap to launch AR — only shown before AR starts */}
+      {/* Minimal launch screen — no dish preview, just a button */}
       {!arActive && (
-        <button
-          onClick={startAR}
-          disabled={!modelReady}
-          className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black w-full"
-        >
-          {currentItem?.image && (
-            <img
-              src={currentItem.image}
-              alt={currentItem.name}
-              className="w-[200px] h-[200px] rounded-full object-cover border-4 border-white/20 mb-6"
-            />
-          )}
-          <h2 className="font-signifier text-[24px] text-white mb-1">
-            {currentItem?.name}
-          </h2>
-          <p className="text-white/50 text-[14px] mb-6 px-8 text-center">{currentItem?.description}</p>
+        <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black">
+          <p className="font-signifier text-white/70 text-[18px] mb-8">{restaurantName}</p>
 
-          <div className={`rounded-full px-8 py-4 flex items-center gap-3 ${modelReady ? "bg-white" : "bg-white/30"}`}>
+          <button
+            onClick={startAR}
+            disabled={!modelReady}
+            className={`rounded-full px-10 py-5 flex items-center gap-3 ${modelReady ? "bg-white active:bg-white/80" : "bg-white/30"}`}
+          >
             {!modelReady && (
               <svg className="animate-spin h-5 w-5 text-black" viewBox="0 0 24 24" fill="none">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
             )}
-            <span className={`font-semibold text-[16px] ${modelReady ? "text-black" : "text-black/50"}`}>
-              {modelReady ? "View in AR" : "Preparing 3D model..."}
+            <span className={`font-semibold text-[18px] ${modelReady ? "text-black" : "text-black/50"}`}>
+              {modelReady ? "View Menu in AR" : "Loading..."}
             </span>
-          </div>
-          <p className="text-white/40 text-[12px] mt-3">
-            {modelReady ? "Tap the button to open your camera" : ""}
-          </p>
+          </button>
 
           {error && (
-            <div className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mt-4 mx-6">
-              <p className="text-red-300 text-[13px]">{error}</p>
+            <div className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mt-6 mx-6">
+              <p className="text-red-300 text-[13px] text-center">{error}</p>
             </div>
           )}
-        </button>
+        </div>
       )}
 
       {/* AR UI overlay */}
