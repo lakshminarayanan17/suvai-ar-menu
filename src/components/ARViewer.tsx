@@ -17,6 +17,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const [arActive, setArActive] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [placed, setPlaced] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -77,6 +78,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       });
     } catch (err) {
       console.error("Model generation failed:", err);
+      setError(`Model failed: ${err}`);
     }
   }, []);
 
@@ -262,6 +264,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       });
     } catch (err) {
       console.error("WebXR session failed:", err);
+      setError(`AR failed: ${err}`);
       setArSupported(false);
     }
   }, []);
@@ -307,8 +310,14 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
   if (!validItems.length) {
     return (
-      <div className="h-full flex items-center justify-center bg-black text-white text-center p-8">
-        <p>No menu items available yet.</p>
+      <div className="h-full flex flex-col items-center justify-center bg-black text-white text-center p-8">
+        <p className="text-xl mb-4">No menu items available yet.</p>
+        <p className="text-white/50 text-sm">
+          Add menu items with images on the owner dashboard first, then scan the QR code.
+        </p>
+        <p className="text-white/30 text-xs mt-4">
+          Total items: {menuItems.length}, With images: {menuItems.filter(m => m.image).length}
+        </p>
       </div>
     );
   }
@@ -374,6 +383,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 Use Chrome on an ARCore-compatible Android device
               </p>
             </div>
+          )}
+
+          {error && (
+            <p className="text-red-400 text-xs mt-4 px-8 text-center">{error}</p>
           )}
         </div>
       )}
