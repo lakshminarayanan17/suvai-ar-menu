@@ -245,29 +245,37 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
 
-      {/* Minimal launch screen — no dish preview, just a button */}
+      {/* Launch screen — dish preview + AR button */}
       {!arActive && (
         <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black">
-          <p className="font-signifier text-white/70 text-[18px] mb-8">{restaurantName}</p>
+          {currentItem?.image && (
+            <img
+              src={currentItem.image}
+              alt={currentItem.name}
+              className="w-[220px] h-[220px] rounded-[24px] object-cover mb-5 shadow-lg shadow-white/10"
+            />
+          )}
+          <h2 className="font-signifier text-white text-[22px] mb-1">{currentItem?.name}</h2>
+          <p className="text-white/50 text-[13px] mb-8 px-12 text-center">{currentItem?.description}</p>
 
           <button
             onClick={startAR}
             disabled={!modelReady}
-            className={`rounded-full px-10 py-5 flex items-center gap-3 ${modelReady ? "bg-white active:bg-white/80" : "bg-white/30"}`}
+            className={`rounded-full px-10 py-4 flex items-center gap-3 ${modelReady ? "bg-white active:bg-white/80" : "bg-white/20"}`}
           >
             {!modelReady && (
-              <svg className="animate-spin h-5 w-5 text-black" viewBox="0 0 24 24" fill="none">
+              <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24" fill="none">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
             )}
-            <span className={`font-semibold text-[18px] ${modelReady ? "text-black" : "text-black/50"}`}>
-              {modelReady ? "View Menu in AR" : "Loading..."}
+            <span className={`font-semibold text-[17px] ${modelReady ? "text-black" : "text-white/50"}`}>
+              {modelReady ? "View in AR" : "Loading..."}
             </span>
           </button>
 
           {error && (
-            <div className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mt-6 mx-6">
+            <div className="bg-red-500/20 border border-red-500/40 rounded-xl px-4 py-3 mt-5 mx-8">
               <p className="text-red-300 text-[13px] text-center">{error}</p>
             </div>
           )}

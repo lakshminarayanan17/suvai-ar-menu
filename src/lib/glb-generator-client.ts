@@ -1,5 +1,5 @@
 // Browser-compatible GLB generator
-// Creates a realistic food dome on a plate for AR placement
+// Creates a food-first 3D model: large food dome on a subtle plate
 
 export async function generatePlateGLBFromUrl(
   imageDataUrl: string
@@ -17,8 +17,8 @@ export async function generatePlateGLBFromUrl(
   return URL.createObjectURL(blob);
 }
 
-const SEG = 64; // segments around circumference
-const DOME_RINGS = 16; // latitude rings for dome
+const SEG = 48;
+const DOME_RINGS = 20;
 
 interface Mesh {
   positions: number[];
@@ -27,82 +27,41 @@ interface Mesh {
   indices: number[];
 }
 
-// Flat plate disc — simple white/cream circle
-function createPlateDisc(radius: number, y: number): Mesh {
+// ---- Geometry Builders ----
+
+// Thin subtle plate — just a flat disc with a slight rim
+function createPlate(radius: number, rimWidth: number, thickness: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
+  const outerR = radius + rimWidth;
 
-  // Center vertex
-  positions.push(0, y, 0);
+  // Top face — full circle
+  positions.push(0, thickness, 0);
   normals.push(0, 1, 0);
   uvs.push(0.5, 0.5);
-
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    const x = Math.cos(a) * radius;
-    const z = Math.sin(a) * radius;
-    positions.push(x, y, z);
+    positions.push(Math.cos(a) * outerR, thickness, Math.sin(a) * outerR);
     normals.push(0, 1, 0);
     uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
   }
-
   for (let i = 0; i < SEG; i++) {
     indices.push(0, 1 + i, 1 + ((i + 1) % SEG));
   }
 
-  return { positions, normals, uvs, indices };
-}
-
-// Plate rim — thin raised edge around the plate
-function createPlateRim(innerR: number, outerR: number, height: number, yBase: number): Mesh {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
-
-  const yTop = yBase + height;
-
-  // Top ring face (annular)
-  for (let i = 0; i <= SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    const cx = Math.cos(a);
-    const cz = Math.sin(a);
-    const u = i / SEG;
-
-    // Inner edge top
-    positions.push(cx * innerR, yTop, cz * innerR);
-    normals.push(0, 1, 0);
-    uvs.push(u, 0);
-
-    // Outer edge top
-    positions.push(cx * outerR, yTop, cz * outerR);
-    normals.push(0, 1, 0);
-    uvs.push(u, 1);
-  }
-
-  for (let i = 0; i < SEG; i++) {
-    const a = i * 2;
-    indices.push(a, a + 2, a + 1);
-    indices.push(a + 1, a + 2, a + 3);
-  }
-
-  // Outer side wall
+  // Outer edge (side wall)
   const sideBase = positions.length / 3;
   for (let i = 0; i <= SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    const nx = Math.cos(a);
-    const nz = Math.sin(a);
-    const u = i / SEG;
-
-    positions.push(nx * outerR, yTop, nz * outerR);
+    const nx = Math.cos(a), nz = Math.sin(a);
+    positions.push(nx * outerR, thickness, nz * outerR);
     normals.push(nx, 0, nz);
-    uvs.push(u, 1);
-
-    positions.push(nx * outerR, yBase, nz * outerR);
+    uvs.push(i / SEG, 1);
+    positions.push(nx * outerR, 0, nz * outerR);
     normals.push(nx, 0, nz);
-    uvs.push(u, 0);
+    uvs.push(i / SEG, 0);
   }
   for (let i = 0; i < SEG; i++) {
     const a = sideBase + i * 2;
@@ -112,13 +71,12 @@ function createPlateRim(innerR: number, outerR: number, height: number, yBase: n
 
   // Bottom face
   const botBase = positions.length / 3;
-  positions.push(0, yBase, 0);
+  positions.push(0, 0, 0);
   normals.push(0, -1, 0);
   uvs.push(0.5, 0.5);
-
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    positions.push(Math.cos(a) * outerR, yBase, Math.sin(a) * outerR);
+    positions.push(Math.cos(a) * outerR, 0, Math.sin(a) * outerR);
     normals.push(0, -1, 0);
     uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
   }
@@ -129,44 +87,42 @@ function createPlateRim(innerR: number, outerR: number, height: number, yBase: n
   return { positions, normals, uvs, indices };
 }
 
-// Food dome — hemisphere with food image texture mapped from above
-// This gives the food a 3D volume appearance
+// Food dome — the main visual. Gentle hemisphere with food image on top.
 function createFoodDome(radius: number, height: number, yBase: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  // Generate dome vertices using latitude/longitude
   for (let lat = 0; lat <= DOME_RINGS; lat++) {
-    const latAngle = (lat / DOME_RINGS) * (Math.PI / 2); // 0 to PI/2
+    // Use a power curve for a gentler, more natural dome profile
+    const t = lat / DOME_RINGS;
+    const latAngle = t * (Math.PI / 2);
     const cosLat = Math.cos(latAngle);
     const sinLat = Math.sin(latAngle);
     const y = yBase + sinLat * height;
-    const ringRadius = cosLat * radius;
+    const ringR = cosLat * radius;
 
     for (let lon = 0; lon <= SEG; lon++) {
       const lonAngle = (lon / SEG) * Math.PI * 2;
-      const x = Math.cos(lonAngle) * ringRadius;
-      const z = Math.sin(lonAngle) * ringRadius;
-
+      const x = Math.cos(lonAngle) * ringR;
+      const z = Math.sin(lonAngle) * ringR;
       positions.push(x, y, z);
 
-      // Normal: outward from ellipsoid surface
+      // Normal
       const nx = Math.cos(lonAngle) * cosLat;
       const ny = sinLat * (radius / height);
       const nz = Math.sin(lonAngle) * cosLat;
-      const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
-      normals.push(nx / nLen, ny / nLen, nz / nLen);
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      normals.push(nx / len, ny / len, nz / len);
 
-      // UV: project from above — maps circular image onto dome
+      // UV: project food image from above onto dome
       const u = 0.5 + Math.cos(lonAngle) * cosLat * 0.5;
       const v = 0.5 + Math.sin(lonAngle) * cosLat * 0.5;
       uvs.push(u, v);
     }
   }
 
-  // Generate indices
   for (let lat = 0; lat < DOME_RINGS; lat++) {
     for (let lon = 0; lon < SEG; lon++) {
       const a = lat * (SEG + 1) + lon;
@@ -174,33 +130,6 @@ function createFoodDome(radius: number, height: number, yBase: number): Mesh {
       indices.push(a, b, a + 1);
       indices.push(a + 1, b, b + 1);
     }
-  }
-
-  return { positions, normals, uvs, indices };
-}
-
-// Bottom cap for the dome (flat disc at the base of the food)
-function createDomeBase(radius: number, y: number): Mesh {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
-
-  // Center
-  positions.push(0, y, 0);
-  normals.push(0, -1, 0);
-  uvs.push(0.5, 0.5);
-
-  for (let i = 0; i < SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    positions.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
-    normals.push(0, -1, 0);
-    uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
-  }
-
-  // Wind clockwise (facing down)
-  for (let i = 0; i < SEG; i++) {
-    indices.push(0, 1 + ((i + 1) % SEG), 1 + i);
   }
 
   return { positions, normals, uvs, indices };
@@ -221,20 +150,14 @@ function computeBounds(positions: number[]) {
 // ---- GLB Builder ----
 
 function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
-  // Realistic proportions (all y starts at 0 so model sits on surface):
-  //
-  // Plate disc:     r=0.13,               y=0.005     (white top surface)
-  // Plate rim:      inner=0.12, outer=0.14, h=0.008, y=0  (raised edge)
-  // Food dome:      r=0.10,  h=0.06,      y=0.005     (hemisphere with food texture)
-  // Food base:      r=0.10,               y=0.005     (flat bottom of food)
+  // Food-first proportions:
+  // Food dome: r=0.12m (24cm diameter), h=0.04m (4cm tall) — THE STAR
+  // Plate:     r=0.13m + 0.01m rim, 0.004m thick — subtle background
 
-  const plateDisc = createPlateDisc(0.13, 0.005);
-  const plateRim = createPlateRim(0.12, 0.14, 0.008, 0);
-  const foodDome = createFoodDome(0.10, 0.06, 0.005);
-  const foodBase = createDomeBase(0.10, 0.005);
+  const plate = createPlate(0.13, 0.01, 0.004);
+  const foodDome = createFoodDome(0.12, 0.04, 0.004);
 
-  // 4 meshes → 4 primitives → 3 materials (plate disc + rim share material)
-  const meshes = [plateDisc, plateRim, foodDome, foodBase];
+  const meshes = [plate, foodDome];
 
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
@@ -251,7 +174,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     const idxBytes = idxCount * 2;
     const idxPad = (4 - (idxBytes % 4)) % 4;
 
-    // Positions
     bufferViews.push({ byteOffset: totalBinSize, byteLength: posBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
@@ -260,7 +182,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     });
     totalBinSize += posBytes;
 
-    // Normals
     bufferViews.push({ byteOffset: totalBinSize, byteLength: normBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
@@ -268,7 +189,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     });
     totalBinSize += normBytes;
 
-    // UVs
     bufferViews.push({ byteOffset: totalBinSize, byteLength: uvBytes, target: 34962 });
     accessors.push({
       bufferView: bufferViews.length - 1,
@@ -276,7 +196,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     });
     totalBinSize += uvBytes;
 
-    // Indices
     bufferViews.push({ byteOffset: totalBinSize, byteLength: idxBytes + idxPad, target: 34963 });
     accessors.push({
       bufferView: bufferViews.length - 1,
@@ -285,8 +204,8 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     totalBinSize += idxBytes + idxPad;
   }
 
-  // Image bufferView
-  const imageViewIndex = bufferViews.length;
+  // Image
+  const imageViewIdx = bufferViews.length;
   bufferViews.push({ byteOffset: totalBinSize, byteLength: imageBytes.byteLength, target: 0 });
   totalBinSize += imageBytes.byteLength;
 
@@ -298,62 +217,44 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     scene: 0,
     scenes: [{ nodes: [0] }],
     nodes: [{ name: "FoodPlate", mesh: 0 }],
-    meshes: [
-      {
-        primitives: meshes.map((_, i) => ({
-          attributes: {
-            POSITION: i * 4,
-            NORMAL: i * 4 + 1,
-            TEXCOORD_0: i * 4 + 2,
-          },
-          indices: i * 4 + 3,
-          material: i,
-        })),
-      },
-    ],
+    meshes: [{
+      primitives: [
+        {
+          attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 },
+          indices: 3,
+          material: 0,
+        },
+        {
+          attributes: { POSITION: 4, NORMAL: 5, TEXCOORD_0: 6 },
+          indices: 7,
+          material: 1,
+        },
+      ],
+    }],
     materials: [
-      // 0: Plate top disc — clean white ceramic
+      // Plate — subtle white ceramic
       {
-        name: "PlateTop",
+        name: "Plate",
         pbrMetallicRoughness: {
-          baseColorFactor: [0.95, 0.93, 0.90, 1.0],
+          baseColorFactor: [0.94, 0.92, 0.89, 1.0],
           metallicFactor: 0.02,
-          roughnessFactor: 0.6,
+          roughnessFactor: 0.55,
         },
       },
-      // 1: Plate rim — slightly off-white with subtle gloss
+      // Food — textured with dish image, no metallic, slightly rough
       {
-        name: "PlateRim",
-        pbrMetallicRoughness: {
-          baseColorFactor: [0.92, 0.90, 0.87, 1.0],
-          metallicFactor: 0.03,
-          roughnessFactor: 0.5,
-        },
-      },
-      // 2: Food dome — TEXTURED with the dish image
-      {
-        name: "FoodDome",
+        name: "Food",
         pbrMetallicRoughness: {
           baseColorTexture: { index: 0 },
           metallicFactor: 0.0,
-          roughnessFactor: 0.85,
+          roughnessFactor: 0.8,
         },
-      },
-      // 3: Food base — hidden underside, dark
-      {
-        name: "FoodBase",
-        pbrMetallicRoughness: {
-          baseColorFactor: [0.35, 0.25, 0.15, 1.0],
-          metallicFactor: 0.0,
-          roughnessFactor: 0.95,
-        },
+        doubleSided: true,
       },
     ],
     textures: [{ source: 0, sampler: 0 }],
-    samplers: [
-      { magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 },
-    ],
-    images: [{ bufferView: imageViewIndex, mimeType }],
+    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
+    images: [{ bufferView: imageViewIdx, mimeType }],
     accessors,
     bufferViews: bufferViews.map((bv) =>
       bv.target
@@ -374,7 +275,7 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   const u8 = new Uint8Array(out);
   let off = 0;
 
-  // Header
+  // GLB header
   dv.setUint32(off, 0x46546c67, true); off += 4;
   dv.setUint32(off, 2, true); off += 4;
   dv.setUint32(off, glbSize, true); off += 4;
@@ -389,7 +290,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   dv.setUint32(off, paddedBinSize, true); off += 4;
   dv.setUint32(off, 0x004e4942, true); off += 4;
 
-  // Write mesh data
   for (const mesh of meshes) {
     for (const v of mesh.positions) { dv.setFloat32(off, v, true); off += 4; }
     for (const v of mesh.normals) { dv.setFloat32(off, v, true); off += 4; }
@@ -399,7 +299,6 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     for (let i = 0; i < idxPad; i++) u8[off++] = 0;
   }
 
-  // Image data
   u8.set(imageBytes, off); off += imageBytes.byteLength;
   for (let i = 0; i < binPad; i++) u8[off++] = 0;
 
