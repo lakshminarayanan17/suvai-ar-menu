@@ -69,20 +69,23 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // When model changes during AR, swap the placed model
+  // When user switches dish during AR, swap the placed model
+  const prevIndexRef = useRef(currentIndex);
   useEffect(() => {
+    if (prevIndexRef.current === currentIndex) return; // skip if index didn't change
+    prevIndexRef.current = currentIndex;
+
     if (arActive && placed && foodModelRef.current && placedModelRef.current && sceneRef.current) {
       const oldPos = placedModelRef.current.position.clone();
-      const oldRot = placedModelRef.current.rotation.clone();
       sceneRef.current.remove(placedModelRef.current);
 
       const newModel = foodModelRef.current.clone();
       newModel.position.copy(oldPos);
-      newModel.rotation.copy(oldRot);
+      newModel.rotation.set(0, 0, 0);
       sceneRef.current.add(newModel);
       placedModelRef.current = newModel;
     }
-  }, [modelReady, arActive, placed]);
+  }, [currentIndex, modelReady, arActive, placed]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -174,37 +177,40 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Auto-place flag
+      // Wait for stable surface detection (skip first few frames)
       let autoPlaced = false;
+      let hitCount = 0;
+      const MIN_HITS = 5; // wait for 5 consistent hits before placing
 
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — auto-place on first surface detected
+        // Hit test — wait for stable detection then auto-place
         if (hitTestSourceRef.current && !autoPlaced) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0 && foodModelRef.current) {
-            const hit = hitResults[0];
-            const pose = hit.getPose(refSpaceLocal);
-            if (pose) {
-              const model = foodModelRef.current.clone();
-              // Place model exactly at the detected surface
-              const p = pose.transform.position;
-              model.position.set(p.x, p.y, p.z);
-              // Only apply Y rotation so model stays upright on surface
-              model.rotation.set(0, 0, 0);
+            hitCount++;
+            if (hitCount >= MIN_HITS) {
+              const hit = hitResults[0];
+              const pose = hit.getPose(refSpaceLocal);
+              if (pose) {
+                const model = foodModelRef.current.clone();
+                const p = pose.transform.position;
+                model.position.set(p.x, p.y, p.z);
+                model.rotation.set(0, 0, 0);
 
-              scene.add(model);
-              placedModelRef.current = model;
-              autoPlaced = true;
-              setPlaced(true);
-              setArStatus("");
-
-              // Stop hit testing
-              hitTestSourceRef.current = null;
+                scene.add(model);
+                placedModelRef.current = model;
+                autoPlaced = true;
+                setPlaced(true);
+                setArStatus("");
+                hitTestSourceRef.current = null;
+              }
             }
+          } else {
+            hitCount = 0; // reset if we lose tracking
           }
         }
 
