@@ -33,8 +33,11 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const validItems = menuItems.filter((m) => m.image);
   const currentItem = validItems[currentIndex];
 
+  // Track which item index the loaded model belongs to
+  const loadedModelIndexRef = useRef<number>(-1);
+
   // Generate GLB model for current item
-  const generateModel = useCallback(async (item: MenuItem) => {
+  const generateModel = useCallback(async (item: MenuItem, index: number) => {
     if (!item.image) return;
     setModelReady(false);
     try {
@@ -54,6 +57,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           }
         });
         foodModelRef.current = model;
+        loadedModelIndexRef.current = index;
         setModelReady(true);
       });
     } catch (err) {
@@ -65,27 +69,28 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   // Generate model on mount and when item changes
   useEffect(() => {
     if (currentItem) {
-      generateModel(currentItem);
+      generateModel(currentItem, currentIndex);
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // When user switches dish during AR, swap the placed model
-  const prevIndexRef = useRef(currentIndex);
+  // When new model finishes loading during AR, swap it in
+  const placedModelIndexRef = useRef<number>(-1);
   useEffect(() => {
-    if (prevIndexRef.current === currentIndex) return; // skip if index didn't change
-    prevIndexRef.current = currentIndex;
+    if (!modelReady || !arActive || !placed) return;
+    if (!foodModelRef.current || !placedModelRef.current || !sceneRef.current) return;
+    // Only swap if the loaded model is for a DIFFERENT dish than what's currently placed
+    if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
 
-    if (arActive && placed && foodModelRef.current && placedModelRef.current && sceneRef.current) {
-      const oldPos = placedModelRef.current.position.clone();
-      sceneRef.current.remove(placedModelRef.current);
+    const oldPos = placedModelRef.current.position.clone();
+    sceneRef.current.remove(placedModelRef.current);
 
-      const newModel = foodModelRef.current.clone();
-      newModel.position.copy(oldPos);
-      newModel.rotation.set(0, 0, 0);
-      sceneRef.current.add(newModel);
-      placedModelRef.current = newModel;
-    }
-  }, [currentIndex, modelReady, arActive, placed]);
+    const newModel = foodModelRef.current.clone();
+    newModel.position.copy(oldPos);
+    newModel.rotation.set(0, 0, 0);
+    sceneRef.current.add(newModel);
+    placedModelRef.current = newModel;
+    placedModelIndexRef.current = loadedModelIndexRef.current;
+  }, [modelReady, arActive, placed]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -203,6 +208,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
                 scene.add(model);
                 placedModelRef.current = model;
+                placedModelIndexRef.current = loadedModelIndexRef.current;
                 autoPlaced = true;
                 setPlaced(true);
                 setArStatus("");
