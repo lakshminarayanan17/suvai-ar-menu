@@ -336,10 +336,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 />
               </div>
               <p className="text-white text-[14px] font-medium text-center whitespace-nowrap">
-                {!modelReady ? "Preparing dish..." : "Finding surface..."}
+                {!modelReady ? "Marinating the flavours..." : "Plating your dish..."}
               </p>
               <p className="text-white/50 text-[12px] text-center">
-                Point your phone at a flat surface
+                {!modelReady ? "Almost ready to serve" : "Point at your table"}
               </p>
             </div>
           )}
