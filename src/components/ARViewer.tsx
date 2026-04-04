@@ -17,7 +17,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const [modelReady, setModelReady] = useState(false);
   const [placed, setPlaced] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [arStatus, setArStatus] = useState<string>("");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -102,7 +101,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
     setPlaced(true);
-    setArStatus("");
   }, []);
 
   // When model finishes loading during AR — place if we have a saved pose, or swap if already placed
@@ -131,11 +129,9 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   // Start AR session
   const startAR = useCallback(async () => {
     setError(null);
-    setArStatus("Starting AR...");
-
+    
     if (!navigator.xr) {
       setError("AR is not supported on this browser. Use Chrome on Android.");
-      setArStatus("");
       return;
     }
 
@@ -143,12 +139,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       const supported = await navigator.xr.isSessionSupported("immersive-ar");
       if (!supported) {
         setError("AR not supported on this device. Needs ARCore + Chrome.");
-        setArStatus("");
-        return;
+          return;
       }
     } catch {
       setError("Could not check AR support. Try Chrome on Android.");
-      setArStatus("");
       return;
     }
 
@@ -199,7 +193,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       renderer.xr.setReferenceSpaceType("local");
       await renderer.xr.setSession(session);
       setArActive(true);
-      setArStatus("Slowly move your phone around...");
 
       const refSpace = await session.requestReferenceSpace("viewer");
       const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
@@ -244,8 +237,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 placedModelIndexRef.current = loadedModelIndexRef.current;
                 autoPlaced = true;
                 setPlaced(true);
-                setArStatus("");
-                hitTestSourceRef.current = null;
+                          hitTestSourceRef.current = null;
               }
               // If model not ready yet, keep updating savedPose — model will be placed via useEffect when ready
             }
@@ -257,7 +249,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     } catch (err) {
       console.error("WebXR session failed:", err);
       setError(`AR failed: ${err instanceof Error ? err.message : String(err)}`);
-      setArStatus("");
     }
   }, []);
 
@@ -329,13 +320,27 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Status message */}
-          {arStatus && (
+          {/* Loading overlay — visible until model is placed */}
+          {!placed && (
             <div
-              className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] rounded-full px-6 py-3"
+              className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-4 px-8 py-6 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
             >
-              <p className="text-white text-[15px] font-medium whitespace-nowrap">{arStatus}</p>
+              {/* Animated ring spinner */}
+              <div className="relative w-12 h-12">
+                <div
+                  className="absolute inset-0 rounded-full border-[3px] border-white/20"
+                />
+                <div
+                  className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin"
+                />
+              </div>
+              <p className="text-white text-[14px] font-medium text-center whitespace-nowrap">
+                {!modelReady ? "Preparing dish..." : "Finding surface..."}
+              </p>
+              <p className="text-white/50 text-[12px] text-center">
+                Point your phone at a flat surface
+              </p>
             </div>
           )}
 
