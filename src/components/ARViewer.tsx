@@ -132,10 +132,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
     renderer.xr.enabled = true;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     rendererRef.current = renderer;
 
     const scene = new THREE.Scene();
@@ -144,17 +142,18 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     const camera = new THREE.PerspectiveCamera(70, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.01, 20);
     cameraRef.current = camera;
 
-    // Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(1, 3, 2);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.set(1024, 1024);
+    // Bright lighting — ensures food is clearly visible in any environment
+    scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3.0);
+    dirLight.position.set(1, 4, 2);
     scene.add(dirLight);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
-    fillLight.position.set(-2, 2, -1);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    fillLight.position.set(-2, 3, -1);
     scene.add(fillLight);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.8));
+    const backLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    backLight.position.set(0, 2, -3);
+    scene.add(backLight);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xcccccc, 2.0));
 
     try {
       const session = await navigator.xr!.requestSession("immersive-ar", {
