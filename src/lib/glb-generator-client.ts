@@ -1,5 +1,5 @@
 // Browser-compatible GLB generator
-// Creates a food-first 3D model: large food dome on a subtle plate
+// Creates a high-quality clean plate with food dome for AR
 
 export async function generatePlateGLBFromUrl(
   imageDataUrl: string
@@ -17,8 +17,8 @@ export async function generatePlateGLBFromUrl(
   return URL.createObjectURL(blob);
 }
 
-const SEG = 48;
-const DOME_RINGS = 20;
+const SEG = 64;
+const DOME_RINGS = 24;
 
 interface Mesh {
   positions: number[];
@@ -29,65 +29,103 @@ interface Mesh {
 
 // ---- Geometry Builders ----
 
-// Thin subtle plate — just a flat disc with a slight rim
-function createPlate(radius: number, rimWidth: number, thickness: number): Mesh {
+// Clean flat disc
+function createDisc(radius: number, y: number, faceUp: boolean): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
-  const outerR = radius + rimWidth;
+  const ny = faceUp ? 1 : -1;
 
-  // Top face — full circle
-  positions.push(0, thickness, 0);
-  normals.push(0, 1, 0);
+  positions.push(0, y, 0);
+  normals.push(0, ny, 0);
   uvs.push(0.5, 0.5);
+
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    positions.push(Math.cos(a) * outerR, thickness, Math.sin(a) * outerR);
-    normals.push(0, 1, 0);
+    positions.push(Math.cos(a) * radius, y, Math.sin(a) * radius);
+    normals.push(0, ny, 0);
     uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
   }
-  for (let i = 0; i < SEG; i++) {
-    indices.push(0, 1 + i, 1 + ((i + 1) % SEG));
-  }
 
-  // Outer edge (side wall)
-  const sideBase = positions.length / 3;
-  for (let i = 0; i <= SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    const nx = Math.cos(a), nz = Math.sin(a);
-    positions.push(nx * outerR, thickness, nz * outerR);
-    normals.push(nx, 0, nz);
-    uvs.push(i / SEG, 1);
-    positions.push(nx * outerR, 0, nz * outerR);
-    normals.push(nx, 0, nz);
-    uvs.push(i / SEG, 0);
-  }
   for (let i = 0; i < SEG; i++) {
-    const a = sideBase + i * 2;
-    indices.push(a, a + 1, a + 2);
-    indices.push(a + 2, a + 1, a + 3);
-  }
-
-  // Bottom face
-  const botBase = positions.length / 3;
-  positions.push(0, 0, 0);
-  normals.push(0, -1, 0);
-  uvs.push(0.5, 0.5);
-  for (let i = 0; i < SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    positions.push(Math.cos(a) * outerR, 0, Math.sin(a) * outerR);
-    normals.push(0, -1, 0);
-    uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
-  }
-  for (let i = 0; i < SEG; i++) {
-    indices.push(botBase, botBase + 1 + ((i + 1) % SEG), botBase + 1 + i);
+    if (faceUp) {
+      indices.push(0, 1 + i, 1 + ((i + 1) % SEG));
+    } else {
+      indices.push(0, 1 + ((i + 1) % SEG), 1 + i);
+    }
   }
 
   return { positions, normals, uvs, indices };
 }
 
-// Food dome — the main visual. Gentle hemisphere with food image on top.
+// Ring (annular shape) — for plate rim band
+function createRing(innerR: number, outerR: number, y: number, faceUp: boolean): Mesh {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const ny = faceUp ? 1 : -1;
+
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const cx = Math.cos(a), cz = Math.sin(a);
+    const u = i / SEG;
+
+    positions.push(cx * innerR, y, cz * innerR);
+    normals.push(0, ny, 0);
+    uvs.push(u, 0);
+
+    positions.push(cx * outerR, y, cz * outerR);
+    normals.push(0, ny, 0);
+    uvs.push(u, 1);
+  }
+
+  for (let i = 0; i < SEG; i++) {
+    const a = i * 2;
+    if (faceUp) {
+      indices.push(a, a + 2, a + 1);
+      indices.push(a + 1, a + 2, a + 3);
+    } else {
+      indices.push(a, a + 1, a + 2);
+      indices.push(a + 2, a + 1, a + 3);
+    }
+  }
+
+  return { positions, normals, uvs, indices };
+}
+
+// Cylinder wall (side of plate)
+function createCylinderWall(radius: number, yBottom: number, yTop: number): Mesh {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const nx = Math.cos(a), nz = Math.sin(a);
+    const u = i / SEG;
+
+    positions.push(nx * radius, yTop, nz * radius);
+    normals.push(nx, 0, nz);
+    uvs.push(u, 1);
+
+    positions.push(nx * radius, yBottom, nz * radius);
+    normals.push(nx, 0, nz);
+    uvs.push(u, 0);
+  }
+
+  for (let i = 0; i < SEG; i++) {
+    const a = i * 2;
+    indices.push(a, a + 1, a + 2);
+    indices.push(a + 2, a + 1, a + 3);
+  }
+
+  return { positions, normals, uvs, indices };
+}
+
+// Food dome — hemisphere with food image projected from above
 function createFoodDome(radius: number, height: number, yBase: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
@@ -95,7 +133,6 @@ function createFoodDome(radius: number, height: number, yBase: number): Mesh {
   const indices: number[] = [];
 
   for (let lat = 0; lat <= DOME_RINGS; lat++) {
-    // Use a power curve for a gentler, more natural dome profile
     const t = lat / DOME_RINGS;
     const latAngle = t * (Math.PI / 2);
     const cosLat = Math.cos(latAngle);
@@ -109,14 +146,13 @@ function createFoodDome(radius: number, height: number, yBase: number): Mesh {
       const z = Math.sin(lonAngle) * ringR;
       positions.push(x, y, z);
 
-      // Normal
       const nx = Math.cos(lonAngle) * cosLat;
-      const ny = sinLat * (radius / height);
+      const ny = sinLat * (radius / Math.max(height, 0.001));
       const nz = Math.sin(lonAngle) * cosLat;
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       normals.push(nx / len, ny / len, nz / len);
 
-      // UV: project food image from above onto dome
+      // Project food image from above
       const u = 0.5 + Math.cos(lonAngle) * cosLat * 0.5;
       const v = 0.5 + Math.sin(lonAngle) * cosLat * 0.5;
       uvs.push(u, v);
@@ -150,14 +186,37 @@ function computeBounds(positions: number[]) {
 // ---- GLB Builder ----
 
 function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
-  // Food-first proportions:
-  // Food dome: r=0.12m (24cm diameter), h=0.04m (4cm tall) — THE STAR
-  // Plate:     r=0.13m + 0.01m rim, 0.004m thick — subtle background
+  // High-quality plate proportions:
+  //
+  // Plate: 28cm diameter (r=0.14), 5mm thick
+  //   - White ceramic top surface (inner disc r=0.12)
+  //   - Blue accent rim band (ring r=0.12 to r=0.14)
+  //   - Outer wall (cylinder r=0.14, 5mm)
+  //   - Bottom disc
+  //
+  // Food dome: 20cm diameter (r=0.10), 3.5cm tall
+  //   - Sits on plate surface at y=0.005
 
-  const plate = createPlate(0.13, 0.01, 0.004);
-  const foodDome = createFoodDome(0.12, 0.04, 0.004);
+  const PLATE_R = 0.14;
+  const INNER_R = 0.12;
+  const PLATE_H = 0.005;
+  const FOOD_R = 0.10;
+  const FOOD_H = 0.035;
 
-  const meshes = [plate, foodDome];
+  // Meshes: [plateTop, rimBand, plateWall, plateBottom, foodDome]
+  const plateTop = createDisc(INNER_R, PLATE_H, true);           // 0: white inner
+  const rimBand = createRing(INNER_R, PLATE_R, PLATE_H, true);   // 1: blue accent rim
+  const plateWall = createCylinderWall(PLATE_R, 0, PLATE_H);     // 2: white side
+  const plateBottom = createDisc(PLATE_R, 0, false);              // 3: white bottom
+  const foodDome = createFoodDome(FOOD_R, FOOD_H, PLATE_H);      // 4: food texture
+
+  const meshes = [plateTop, rimBand, plateWall, plateBottom, foodDome];
+
+  // Materials:
+  // 0 = white ceramic (plateTop, plateWall, plateBottom)
+  // 1 = blue accent rim
+  // 2 = food texture
+  const materialMap = [0, 1, 0, 0, 2]; // mesh index → material index
 
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
@@ -218,36 +277,42 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
     scenes: [{ nodes: [0] }],
     nodes: [{ name: "FoodPlate", mesh: 0 }],
     meshes: [{
-      primitives: [
-        {
-          attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 },
-          indices: 3,
-          material: 0,
+      primitives: meshes.map((_, i) => ({
+        attributes: {
+          POSITION: i * 4,
+          NORMAL: i * 4 + 1,
+          TEXCOORD_0: i * 4 + 2,
         },
-        {
-          attributes: { POSITION: 4, NORMAL: 5, TEXCOORD_0: 6 },
-          indices: 7,
-          material: 1,
-        },
-      ],
+        indices: i * 4 + 3,
+        material: materialMap[i],
+      })),
     }],
     materials: [
-      // Plate — subtle white ceramic
+      // 0: White ceramic — clean, glossy porcelain
       {
-        name: "Plate",
+        name: "Ceramic",
         pbrMetallicRoughness: {
-          baseColorFactor: [0.94, 0.92, 0.89, 1.0],
-          metallicFactor: 0.02,
-          roughnessFactor: 0.55,
+          baseColorFactor: [0.97, 0.96, 0.94, 1.0],
+          metallicFactor: 0.03,
+          roughnessFactor: 0.35,
         },
       },
-      // Food — textured with dish image, no metallic, slightly rough
+      // 1: Blue accent rim — rich blue like reference plate
+      {
+        name: "RimAccent",
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.22, 0.42, 0.72, 1.0],
+          metallicFactor: 0.02,
+          roughnessFactor: 0.4,
+        },
+      },
+      // 2: Food — textured with dish image
       {
         name: "Food",
         pbrMetallicRoughness: {
           baseColorTexture: { index: 0 },
           metallicFactor: 0.0,
-          roughnessFactor: 0.8,
+          roughnessFactor: 0.75,
         },
         doubleSided: true,
       },
