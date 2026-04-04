@@ -257,11 +257,18 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
 
-      {/* Launch screen — restaurant name + AR button only */}
+      {/* Launch screen — dish preview + AR button */}
       {!arActive && (
         <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black">
-          <h1 className="font-signifier text-white text-[28px] tracking-[-0.5px] mb-2">{restaurantName}</h1>
-          <p className="text-white/40 text-[14px] mb-10">AR Menu Experience</p>
+          {currentItem?.image && (
+            <img
+              src={currentItem.image}
+              alt={currentItem.name}
+              className="w-[220px] h-[220px] rounded-[24px] object-cover mb-5 shadow-lg shadow-white/10"
+            />
+          )}
+          <h2 className="font-signifier text-white text-[22px] mb-1">{currentItem?.name}</h2>
+          <p className="text-white/50 text-[13px] mb-8 px-12 text-center">{currentItem?.description}</p>
 
           <button
             onClick={startAR}
@@ -275,7 +282,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
               </svg>
             )}
             <span className={`font-semibold text-[17px] ${modelReady ? "text-black" : "text-white/50"}`}>
-              {modelReady ? "View Menu in AR" : "Loading..."}
+              {modelReady ? "View in AR" : "Loading..."}
             </span>
           </button>
 
