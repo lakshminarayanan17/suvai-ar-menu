@@ -1,5 +1,5 @@
 // Browser-compatible GLB generator
-// Creates a food-first 3D model: large food dome on a subtle plate
+// Creates a food-first 3D model: flat food surface on a subtle plate
 
 // Resize image to max 512x512 for fast GLB generation
 function resizeImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Array; mime: string }> {
@@ -21,7 +21,7 @@ function resizeImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Ar
         blob.arrayBuffer().then((buf) => {
           resolve({ bytes: new Uint8Array(buf), mime: "image/jpeg" });
         });
-      }, "image/jpeg", 0.85);
+      }, "image/jpeg", 0.92);
     };
     img.onerror = () => reject(new Error("Image load failed"));
     img.src = dataUrl;
@@ -31,8 +31,8 @@ function resizeImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Ar
 export async function generatePlateGLBFromUrl(
   imageDataUrl: string
 ): Promise<string> {
-  // Resize to 512px max — dramatically speeds up GLB generation
-  const { bytes: imageBytes, mime: mimeType } = await resizeImage(imageDataUrl, 512);
+  // Resize to 1024px max for sharp food texture
+  const { bytes: imageBytes, mime: mimeType } = await resizeImage(imageDataUrl, 1024);
 
   const glbBytes = buildGLB(imageBytes, mimeType);
   const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
@@ -40,7 +40,7 @@ export async function generatePlateGLBFromUrl(
 }
 
 const SEG = 32;
-const DOME_RINGS = 12;
+const FOOD_RINGS = 8;
 
 interface Mesh {
   positions: number[];
@@ -109,21 +109,24 @@ function createPlate(radius: number, rimWidth: number, thickness: number): Mesh 
   return { positions, normals, uvs, indices };
 }
 
-// Food dome — the main visual. Gentle hemisphere with food image on top.
-function createFoodDome(radius: number, height: number, yBase: number): Mesh {
+// Food surface — nearly flat disc with very subtle rise at center for realism.
+// Food image is projected from above so it looks like real food sitting on a plate.
+function createFoodSurface(radius: number, height: number, yBase: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  for (let lat = 0; lat <= DOME_RINGS; lat++) {
-    // Use a power curve for a gentler, more natural dome profile
-    const t = lat / DOME_RINGS;
-    const latAngle = t * (Math.PI / 2);
-    const cosLat = Math.cos(latAngle);
-    const sinLat = Math.sin(latAngle);
-    const y = yBase + sinLat * height;
-    const ringR = cosLat * radius;
+  // Center vertex
+  positions.push(0, yBase + height, 0);
+  normals.push(0, 1, 0);
+  uvs.push(0.5, 0.5);
+
+  for (let ring = 1; ring <= FOOD_RINGS; ring++) {
+    const t = ring / FOOD_RINGS; // 0 at center, 1 at edge
+    const ringR = t * radius;
+    // Very gentle parabolic drop from center to edge
+    const y = yBase + height * (1 - t * t);
 
     for (let lon = 0; lon <= SEG; lon++) {
       const lonAngle = (lon / SEG) * Math.PI * 2;
@@ -131,24 +134,28 @@ function createFoodDome(radius: number, height: number, yBase: number): Mesh {
       const z = Math.sin(lonAngle) * ringR;
       positions.push(x, y, z);
 
-      // Normal
-      const nx = Math.cos(lonAngle) * cosLat;
-      const ny = sinLat * (radius / height);
-      const nz = Math.sin(lonAngle) * cosLat;
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      normals.push(nx / len, ny / len, nz / len);
+      // Normal — mostly pointing up for a nearly-flat surface
+      normals.push(0, 1, 0);
 
-      // UV: project food image from above onto dome
-      const u = 0.5 + Math.cos(lonAngle) * cosLat * 0.5;
-      const v = 0.5 + Math.sin(lonAngle) * cosLat * 0.5;
+      // UV: map food image directly from above (no distortion)
+      const u = 0.5 + (Math.cos(lonAngle) * t) * 0.5;
+      const v = 0.5 + (Math.sin(lonAngle) * t) * 0.5;
       uvs.push(u, v);
     }
   }
 
-  for (let lat = 0; lat < DOME_RINGS; lat++) {
+  // Triangles from center to first ring
+  for (let lon = 0; lon < SEG; lon++) {
+    indices.push(0, 1 + lon, 1 + lon + 1);
+  }
+
+  // Triangles between rings
+  for (let ring = 0; ring < FOOD_RINGS - 1; ring++) {
+    const ringStart = 1 + ring * (SEG + 1);
+    const nextRingStart = ringStart + (SEG + 1);
     for (let lon = 0; lon < SEG; lon++) {
-      const a = lat * (SEG + 1) + lon;
-      const b = a + SEG + 1;
+      const a = ringStart + lon;
+      const b = nextRingStart + lon;
       indices.push(a, b, a + 1);
       indices.push(a + 1, b, b + 1);
     }
@@ -173,13 +180,13 @@ function computeBounds(positions: number[]) {
 
 function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   // Food-first proportions:
-  // Food dome: r=0.12m (24cm diameter), h=0.04m (4cm tall) — THE STAR
-  // Plate:     r=0.13m + 0.01m rim, 0.004m thick — subtle background
+  // Food surface: r=0.12m (24cm diameter), h=0.006m (6mm rise) — nearly flat, food image looks natural
+  // Plate:        r=0.13m + 0.01m rim, 0.004m thick — subtle background
 
   const plate = createPlate(0.13, 0.01, 0.004);
-  const foodDome = createFoodDome(0.12, 0.04, 0.004);
+  const foodSurface = createFoodSurface(0.12, 0.006, 0.004);
 
-  const meshes = [plate, foodDome];
+  const meshes = [plate, foodSurface];
 
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
