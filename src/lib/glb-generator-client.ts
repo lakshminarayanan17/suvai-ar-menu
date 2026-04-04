@@ -247,7 +247,7 @@ function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
         pbrMetallicRoughness: {
           baseColorTexture: { index: 0 },
           metallicFactor: 0.0,
-          roughnessFactor: 0.5,
+          roughnessFactor: 0.8,
         },
         doubleSided: true,
       },
