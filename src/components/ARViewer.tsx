@@ -182,10 +182,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Wait for stable surface detection (skip first few frames)
+      // Place on first stable hit
       let autoPlaced = false;
       let hitCount = 0;
-      const MIN_HITS = 5; // wait for 5 consistent hits before placing
+      const MIN_HITS = 2;
 
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;

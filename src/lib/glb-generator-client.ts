@@ -17,8 +17,8 @@ export async function generatePlateGLBFromUrl(
   return URL.createObjectURL(blob);
 }
 
-const SEG = 48;
-const DOME_RINGS = 20;
+const SEG = 32;
+const DOME_RINGS = 12;
 
 interface Mesh {
   positions: number[];
