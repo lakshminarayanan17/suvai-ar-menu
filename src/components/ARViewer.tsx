@@ -30,11 +30,14 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const placedModelRef = useRef<THREE.Group | null>(null);
   const modelBlobUrlRef = useRef<string | null>(null);
 
+  // Track saved surface pose for deferred placement
+  const savedPoseRef = useRef<{ x: number; y: number; z: number } | null>(null);
+
   const validItems = menuItems.filter((m) => m.image);
   const currentItem = validItems[currentIndex];
 
-  // Track which item index the loaded model belongs to
   const loadedModelIndexRef = useRef<number>(-1);
+  const placedModelIndexRef = useRef<number>(-1);
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -48,18 +51,26 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       modelBlobUrlRef.current = url;
 
       const loader = new GLTFLoader();
-      loader.load(url, (gltf) => {
-        const model = gltf.scene;
-        model.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-          }
-        });
-        foodModelRef.current = model;
-        loadedModelIndexRef.current = index;
-        setModelReady(true);
-      });
+      loader.load(
+        url,
+        (gltf) => {
+          const model = gltf.scene;
+          model.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          foodModelRef.current = model;
+          loadedModelIndexRef.current = index;
+          setModelReady(true);
+        },
+        undefined,
+        (err) => {
+          console.error("GLTFLoader error:", err);
+          setError("Failed to load 3D model");
+        }
+      );
     } catch (err) {
       console.error("Model generation failed:", err);
       setError(`Model failed: ${err}`);
@@ -73,24 +84,49 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // When new model finishes loading during AR, swap it in
-  const placedModelIndexRef = useRef<number>(-1);
-  useEffect(() => {
-    if (!modelReady || !arActive || !placed) return;
-    if (!foodModelRef.current || !placedModelRef.current || !sceneRef.current) return;
-    // Only swap if the loaded model is for a DIFFERENT dish than what's currently placed
-    if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
+  // Place model in scene at a given position
+  const placeModel = useCallback(() => {
+    if (!foodModelRef.current || !sceneRef.current || !savedPoseRef.current) return;
 
-    const oldPos = placedModelRef.current.position.clone();
-    sceneRef.current.remove(placedModelRef.current);
+    const model = foodModelRef.current.clone();
+    const p = savedPoseRef.current;
+    model.position.set(p.x, p.y, p.z);
+    model.rotation.set(0, 0, 0);
 
-    const newModel = foodModelRef.current.clone();
-    newModel.position.copy(oldPos);
-    newModel.rotation.set(0, 0, 0);
-    sceneRef.current.add(newModel);
-    placedModelRef.current = newModel;
+    // Remove old model if exists
+    if (placedModelRef.current) {
+      sceneRef.current.remove(placedModelRef.current);
+    }
+
+    sceneRef.current.add(model);
+    placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
-  }, [modelReady, arActive, placed]);
+    setPlaced(true);
+    setArStatus("");
+  }, []);
+
+  // When model finishes loading during AR — place if we have a saved pose, or swap if already placed
+  useEffect(() => {
+    if (!modelReady || !arActive) return;
+    if (!foodModelRef.current || !sceneRef.current) return;
+
+    if (!placed && savedPoseRef.current) {
+      // Model just loaded and we already found a surface — place now
+      placeModel();
+    } else if (placed && placedModelRef.current) {
+      // Dish switch — swap model if different
+      if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
+      const oldPos = placedModelRef.current.position.clone();
+      sceneRef.current.remove(placedModelRef.current);
+
+      const newModel = foodModelRef.current.clone();
+      newModel.position.copy(oldPos);
+      newModel.rotation.set(0, 0, 0);
+      sceneRef.current.add(newModel);
+      placedModelRef.current = newModel;
+      placedModelIndexRef.current = loadedModelIndexRef.current;
+    }
+  }, [modelReady, arActive, placed, placeModel]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -134,8 +170,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     renderer.xr.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
 
     const scene = new THREE.Scene();
@@ -148,8 +182,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(1, 3, 2);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.set(1024, 1024);
     scene.add(dirLight);
     const fillLight = new THREE.DirectionalLight(0xffffff, 0.6);
     fillLight.position.set(-2, 2, -1);
@@ -175,34 +207,35 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
       session.addEventListener("end", () => {
         setArActive(false);
+        setPlaced(false);
         hitTestSourceRef.current = null;
         sessionRef.current = null;
+        savedPoseRef.current = null;
         if (canvasRef.current?.parentNode) canvasRef.current.parentNode.removeChild(canvasRef.current);
         rendererRef.current?.dispose();
         rendererRef.current = null;
       });
 
-      // Place on first stable hit
       let autoPlaced = false;
-      let hitCount = 0;
-      const MIN_HITS = 2;
 
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — wait for stable detection then auto-place
+        // Hit test — save surface position as soon as found
         if (hitTestSourceRef.current && !autoPlaced) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
-          if (hitResults.length > 0 && foodModelRef.current) {
-            hitCount++;
-            if (hitCount >= MIN_HITS) {
-              const hit = hitResults[0];
-              const pose = hit.getPose(refSpaceLocal);
-              if (pose) {
+          if (hitResults.length > 0) {
+            const hit = hitResults[0];
+            const pose = hit.getPose(refSpaceLocal);
+            if (pose) {
+              const p = pose.transform.position;
+              savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
+
+              // If model is ready, place immediately
+              if (foodModelRef.current) {
                 const model = foodModelRef.current.clone();
-                const p = pose.transform.position;
                 model.position.set(p.x, p.y, p.z);
                 model.rotation.set(0, 0, 0);
 
@@ -214,9 +247,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 setArStatus("");
                 hitTestSourceRef.current = null;
               }
+              // If model not ready yet, keep updating savedPose — model will be placed via useEffect when ready
             }
-          } else {
-            hitCount = 0; // reset if we lose tracking
           }
         }
 
@@ -297,7 +329,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Status message — shown while looking for surface */}
+          {/* Status message */}
           {arStatus && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] rounded-full px-6 py-3"
@@ -307,7 +339,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             </div>
           )}
 
-          {/* Top info — always visible during AR */}
+          {/* Top info */}
           <div
             className="absolute top-[60px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
             style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
@@ -320,7 +352,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             </p>
           </div>
 
-          {/* Bottom nav — always visible during AR */}
+          {/* Bottom nav */}
           <div
             className="absolute bottom-[40px] left-[12px] right-[12px] rounded-[17px] p-[16px] z-[30]"
             style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}

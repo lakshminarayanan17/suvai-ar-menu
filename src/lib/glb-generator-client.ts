@@ -1,16 +1,38 @@
 // Browser-compatible GLB generator
 // Creates a food-first 3D model: large food dome on a subtle plate
 
+// Resize image to max 512x512 for fast GLB generation
+function resizeImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Array; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let w = img.width, h = img.height;
+      if (w > maxSize || h > maxSize) {
+        if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+        else { w = Math.round(w * maxSize / h); h = maxSize; }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => {
+        if (!blob) return reject(new Error("Canvas toBlob failed"));
+        blob.arrayBuffer().then((buf) => {
+          resolve({ bytes: new Uint8Array(buf), mime: "image/jpeg" });
+        });
+      }, "image/jpeg", 0.85);
+    };
+    img.onerror = () => reject(new Error("Image load failed"));
+    img.src = dataUrl;
+  });
+}
+
 export async function generatePlateGLBFromUrl(
   imageDataUrl: string
 ): Promise<string> {
-  const base64Match = imageDataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
-  if (!base64Match) throw new Error("Invalid image data URL");
-
-  const mimeType = `image/${base64Match[1]}`;
-  const raw = atob(base64Match[2]);
-  const imageBytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) imageBytes[i] = raw.charCodeAt(i);
+  // Resize to 512px max — dramatically speeds up GLB generation
+  const { bytes: imageBytes, mime: mimeType } = await resizeImage(imageDataUrl, 512);
 
   const glbBytes = buildGLB(imageBytes, mimeType);
   const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
