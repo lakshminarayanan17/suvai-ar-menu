@@ -1,5 +1,5 @@
 // Browser-compatible GLB generator
-// Creates a food-first 3D model: flat food surface on a subtle plate
+// Creates a food-first 3D model: natural food mound on a subtle plate
 
 // Resize image to max 512x512 for fast GLB generation
 function resizeImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Array; mime: string }> {
@@ -40,7 +40,7 @@ export async function generatePlateGLBFromUrl(
 }
 
 const SEG = 32;
-const FOOD_RINGS = 8;
+const FOOD_RINGS = 16;
 
 interface Mesh {
   positions: number[];
@@ -109,14 +109,16 @@ function createPlate(radius: number, rimWidth: number, thickness: number): Mesh 
   return { positions, normals, uvs, indices };
 }
 
-// Food surface — nearly flat disc with very subtle rise at center for realism.
-// Food image is projected from above so it looks like real food sitting on a plate.
+// Food mound — natural 3D volume like real food on a plate.
+// Uses a smooth bell-curve profile: full height at center, tapering to plate level at edges.
+// Side wall gives thickness so it doesn't look paper-thin from any angle.
 function createFoodSurface(radius: number, height: number, yBase: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
+  // --- Top surface (bell-curve mound) ---
   // Center vertex
   positions.push(0, yBase + height, 0);
   normals.push(0, 1, 0);
@@ -125,31 +127,37 @@ function createFoodSurface(radius: number, height: number, yBase: number): Mesh 
   for (let ring = 1; ring <= FOOD_RINGS; ring++) {
     const t = ring / FOOD_RINGS; // 0 at center, 1 at edge
     const ringR = t * radius;
-    // Very gentle parabolic drop from center to edge
-    const y = yBase + height * (1 - t * t);
+    // Smooth bell curve: keeps height in the center, drops smoothly at edges
+    // Using cosine falloff for a natural food-mound shape
+    const profile = Math.cos(t * Math.PI * 0.5); // 1 at center, 0 at edge
+    const y = yBase + height * profile * profile; // squared for gentler slope
 
     for (let lon = 0; lon <= SEG; lon++) {
       const lonAngle = (lon / SEG) * Math.PI * 2;
-      const x = Math.cos(lonAngle) * ringR;
-      const z = Math.sin(lonAngle) * ringR;
-      positions.push(x, y, z);
+      const cx = Math.cos(lonAngle);
+      const sz = Math.sin(lonAngle);
+      positions.push(cx * ringR, y, sz * ringR);
 
-      // Normal — mostly pointing up for a nearly-flat surface
-      normals.push(0, 1, 0);
+      // Compute proper normal from the slope of the bell curve
+      const dydR = -height * 2 * profile * Math.sin(t * Math.PI * 0.5) * (Math.PI * 0.5) / radius;
+      const nx = cx * (-dydR);
+      const ny = 1.0;
+      const nz = sz * (-dydR);
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      normals.push(nx / len, ny / len, nz / len);
 
-      // UV: map food image directly from above (no distortion)
-      const u = 0.5 + (Math.cos(lonAngle) * t) * 0.5;
-      const v = 0.5 + (Math.sin(lonAngle) * t) * 0.5;
+      // UV: project from above
+      const u = 0.5 + (cx * t) * 0.5;
+      const v = 0.5 + (sz * t) * 0.5;
       uvs.push(u, v);
     }
   }
 
-  // Triangles from center to first ring
+  // Top surface triangles: center to first ring
   for (let lon = 0; lon < SEG; lon++) {
     indices.push(0, 1 + lon, 1 + lon + 1);
   }
-
-  // Triangles between rings
+  // Top surface triangles: between rings
   for (let ring = 0; ring < FOOD_RINGS - 1; ring++) {
     const ringStart = 1 + ring * (SEG + 1);
     const nextRingStart = ringStart + (SEG + 1);
@@ -159,6 +167,37 @@ function createFoodSurface(radius: number, height: number, yBase: number): Mesh 
       indices.push(a, b, a + 1);
       indices.push(a + 1, b, b + 1);
     }
+  }
+
+  // --- Side wall (thin edge around the food) ---
+  const sideBase = positions.length / 3;
+  for (let lon = 0; lon <= SEG; lon++) {
+    const lonAngle = (lon / SEG) * Math.PI * 2;
+    const cx = Math.cos(lonAngle);
+    const sz = Math.sin(lonAngle);
+    // Top edge of side wall (matches outermost ring of top surface = yBase)
+    positions.push(cx * radius, yBase, sz * radius);
+    normals.push(cx, 0, sz);
+    uvs.push(lon / SEG, 1);
+    // Bottom edge of side wall (plate level)
+    positions.push(cx * radius, yBase, sz * radius);
+    normals.push(cx, 0, sz);
+    uvs.push(lon / SEG, 0);
+  }
+
+  // --- Bottom face (flat disc underneath) ---
+  const botBase = positions.length / 3;
+  positions.push(0, yBase, 0);
+  normals.push(0, -1, 0);
+  uvs.push(0.5, 0.5);
+  for (let lon = 0; lon < SEG; lon++) {
+    const lonAngle = (lon / SEG) * Math.PI * 2;
+    positions.push(Math.cos(lonAngle) * radius, yBase, Math.sin(lonAngle) * radius);
+    normals.push(0, -1, 0);
+    uvs.push(0.5 + Math.cos(lonAngle) * 0.5, 0.5 + Math.sin(lonAngle) * 0.5);
+  }
+  for (let lon = 0; lon < SEG; lon++) {
+    indices.push(botBase, botBase + 1 + ((lon + 1) % SEG), botBase + 1 + lon);
   }
 
   return { positions, normals, uvs, indices };
@@ -180,11 +219,11 @@ function computeBounds(positions: number[]) {
 
 function buildGLB(imageBytes: Uint8Array, mimeType: string): ArrayBuffer {
   // Food-first proportions:
-  // Food surface: r=0.12m (24cm diameter), h=0.006m (6mm rise) — nearly flat, food image looks natural
-  // Plate:        r=0.13m + 0.01m rim, 0.004m thick — subtle background
+  // Food mound: r=0.12m (24cm diameter), h=0.025m (2.5cm) — natural 3D volume
+  // Plate:      r=0.13m + 0.01m rim, 0.004m thick — flat subtle background
 
   const plate = createPlate(0.13, 0.01, 0.004);
-  const foodSurface = createFoodSurface(0.12, 0.006, 0.004);
+  const foodSurface = createFoodSurface(0.12, 0.025, 0.004);
 
   const meshes = [plate, foodSurface];
 
