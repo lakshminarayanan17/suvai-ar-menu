@@ -7,15 +7,17 @@ import BottomSheet from "./BottomSheet";
 interface MenuFormSheetProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: { name: string; price: number; description: string; image: string | null }) => void;
+  onSubmit: (data: { name: string; price: number; description: string; image: string | null; images: string[] }) => void;
   editItem?: MenuItem | null;
 }
+
+const MAX_IMAGES = 4;
 
 export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: MenuFormSheetProps) {
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [description, setDescription] = useState("");
-  const [image, setImage] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isEdit = !!editItem;
 
@@ -24,12 +26,19 @@ export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: M
       setName(editItem.name);
       setPrice(editItem.price.toString());
       setDescription(editItem.description);
-      setImage(editItem.image);
+      // Load from images array or fall back to single image
+      if (editItem.images && editItem.images.length > 0) {
+        setImages(editItem.images);
+      } else if (editItem.image) {
+        setImages([editItem.image]);
+      } else {
+        setImages([]);
+      }
     } else {
       setName("");
       setPrice("");
       setDescription("");
-      setImage(null);
+      setImages([]);
     }
   }, [editItem, isOpen]);
 
@@ -38,9 +47,19 @@ export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: M
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setImage(ev.target?.result as string);
+      const dataUrl = ev.target?.result as string;
+      setImages((prev) => {
+        if (prev.length >= MAX_IMAGES) return prev;
+        return [...prev, dataUrl];
+      });
     };
     reader.readAsDataURL(file);
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = () => {
@@ -49,44 +68,49 @@ export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: M
       name: name.trim(),
       price: parseFloat(price) || 0,
       description: description.trim(),
-      image,
+      image: images[0] || null, // primary image for backward compat
+      images,
     });
   };
 
   return (
     <BottomSheet isOpen={isOpen} onClose={onClose}>
       <div className="p-[16px] flex flex-col gap-[24px]">
-        {/* Image upload */}
-        <div className="flex flex-col gap-[14px]">
-          <div
-            className="w-[129px] h-[129px] rounded-[14px] border border-dashed border-[#dadada] overflow-hidden flex items-center justify-center cursor-pointer"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {image ? (
-              <div
-                className="w-full h-full rounded-full"
-                style={{
-                  background: "conic-gradient(from 0deg, #d4956b, #c4854b, #d4a56b, #e8c89b, #d4956b)",
-                  padding: "10px",
-                }}
-              >
-                <div className="w-full h-full rounded-full bg-[#f5f0eb] flex items-center justify-center overflow-hidden border-2 border-[#e8d8c8]">
-                  <img
-                    src={image}
-                    alt="Dish"
-                    className="w-[85%] h-[85%] object-cover rounded-full"
-                  />
+        {/* Image upload — up to 4 */}
+        <div className="flex flex-col gap-[10px]">
+          <label className="text-[16px] font-medium text-[#595959] tracking-[-0.32px]">
+            Photos <span className="text-[13px] font-normal text-[#999]">({images.length}/{MAX_IMAGES})</span>
+          </label>
+          <div className="flex gap-[10px] flex-wrap">
+            {/* Existing images */}
+            {images.map((img, i) => (
+              <div key={i} className="relative w-[72px] h-[72px]">
+                <div
+                  className="w-full h-full rounded-[12px] overflow-hidden border border-[#e0e0e0]"
+                >
+                  <img src={img} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" />
                 </div>
+                {/* Remove button */}
+                <button
+                  onClick={() => removeImage(i)}
+                  className="absolute -top-[6px] -right-[6px] w-[20px] h-[20px] bg-black rounded-full flex items-center justify-center"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M1 1L9 9M9 1L1 9" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                </button>
               </div>
-            ) : (
+            ))}
+
+            {/* Add button (if less than max) */}
+            {images.length < MAX_IMAGES && (
               <div
-                className="w-full h-full rounded-full"
-                style={{
-                  background: "conic-gradient(from 0deg, #e0d0c0, #d0c0b0, #e0d0c0, #f0e0d0, #e0d0c0)",
-                  padding: "10px",
-                }}
+                className="w-[72px] h-[72px] rounded-[12px] border-2 border-dashed border-[#d0d0d0] flex items-center justify-center cursor-pointer active:bg-[#f5f5f5]"
+                onClick={() => fileInputRef.current?.click()}
               >
-                <div className="w-full h-full rounded-full bg-[#f5f0eb] border-2 border-[#e8e0d8]" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 5V19M5 12H19" stroke="#999" strokeWidth="2" strokeLinecap="round" />
+                </svg>
               </div>
             )}
           </div>
@@ -97,12 +121,6 @@ export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: M
             onChange={handleImageUpload}
             className="hidden"
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="w-[129px] bg-[#f1f1f1] rounded-[7px] p-[10px] text-center text-[14px] text-[#595959] tracking-[-0.28px]"
-          >
-            {isEdit ? "Edit image" : "Add image"}
-          </button>
         </div>
 
         {/* Dish Name */}
@@ -153,7 +171,10 @@ export default function MenuFormSheet({ isOpen, onClose, onSubmit, editItem }: M
         {/* Submit button */}
         <button
           onClick={handleSubmit}
-          className="w-full h-[56px] bg-[#060606] rounded-[17px] flex items-center justify-center"
+          disabled={images.length === 0}
+          className={`w-full h-[56px] rounded-[17px] flex items-center justify-center ${
+            images.length > 0 ? "bg-[#060606]" : "bg-[#ccc]"
+          }`}
         >
           <span className="text-white text-[18px] font-medium">
             {isEdit ? "Update Menu" : "Add Menu"}

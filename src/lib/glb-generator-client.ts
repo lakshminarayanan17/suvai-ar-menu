@@ -235,12 +235,87 @@ function computeBounds(positions: number[]) {
   return { min, max };
 }
 
+// Combine multiple food images into a single composite texture.
+// Each image maps to a quadrant so the 3D model shows different angles.
+function compositeImages(dataUrls: string[], size: number): Promise<{ bytes: Uint8Array; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+
+    // Fill with neutral background
+    ctx.fillStyle = "#e8e0d8";
+    ctx.fillRect(0, 0, size, size);
+
+    const loadImage = (src: string): Promise<HTMLImageElement> =>
+      new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = rej;
+        img.src = src;
+      });
+
+    Promise.all(dataUrls.map(loadImage)).then((imgs) => {
+      const count = imgs.length;
+      if (count === 1) {
+        // Single image: fill entire canvas
+        ctx.drawImage(imgs[0], 0, 0, size, size);
+      } else if (count === 2) {
+        // 2 images: left half + right half
+        const half = size / 2;
+        ctx.drawImage(imgs[0], 0, 0, half, size);
+        ctx.drawImage(imgs[1], half, 0, half, size);
+      } else if (count === 3) {
+        // 3 images: top-left, top-right, bottom-center
+        const half = size / 2;
+        ctx.drawImage(imgs[0], 0, 0, half, half);
+        ctx.drawImage(imgs[1], half, 0, half, half);
+        ctx.drawImage(imgs[2], half / 2, half, half, half);
+      } else {
+        // 4 images: 2x2 grid
+        const half = size / 2;
+        ctx.drawImage(imgs[0], 0, 0, half, half);
+        ctx.drawImage(imgs[1], half, 0, half, half);
+        ctx.drawImage(imgs[2], 0, half, half, half);
+        ctx.drawImage(imgs[3], half, half, half, half);
+      }
+
+      // Smooth the seams with a subtle radial gradient overlay
+      if (count > 1) {
+        const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.15, size / 2, size / 2, size * 0.5);
+        grad.addColorStop(0, "rgba(0,0,0,0)");
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+      }
+
+      canvas.toBlob((blob) => {
+        if (!blob) return reject(new Error("Composite toBlob failed"));
+        blob.arrayBuffer().then((buf) => {
+          resolve({ bytes: new Uint8Array(buf), mime: "image/jpeg" });
+        });
+      }, "image/jpeg", 0.92);
+    }).catch(reject);
+  });
+}
+
 // ---- Main Export ----
 
-export async function generatePlateGLBFromUrl(imageDataUrl: string): Promise<string> {
-  const { bytes: foodImageBytes } = await prepareFoodImage(imageDataUrl, 1024);
-  const plateImageBytes = generatePlateTexture();
+export async function generatePlateGLBFromUrl(imageDataUrl: string, allImages?: string[]): Promise<string> {
+  let foodImageBytes: Uint8Array;
 
+  if (allImages && allImages.length > 1) {
+    // Multiple images: composite them into one texture
+    const result = await compositeImages(allImages, 1024);
+    foodImageBytes = result.bytes;
+  } else {
+    // Single image
+    const result = await prepareFoodImage(imageDataUrl, 1024);
+    foodImageBytes = result.bytes;
+  }
+
+  const plateImageBytes = generatePlateTexture();
   const glbBytes = buildGLB(foodImageBytes, plateImageBytes);
   const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
   return URL.createObjectURL(blob);

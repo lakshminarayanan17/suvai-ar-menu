@@ -48,26 +48,28 @@ export default function OwnerDashboard() {
     setActiveSheet("edit");
   };
 
-  const handleAddSubmit = (data: { name: string; price: number; description: string; image: string | null }) => {
+  const handleAddSubmit = (data: { name: string; price: number; description: string; image: string | null; images: string[] }) => {
     const newItem: MenuItem = {
       id: uuidv4(),
       name: data.name,
       price: data.price,
       description: data.description,
       image: data.image,
+      images: data.images,
     };
     const restaurant = addMenuItem(newItem);
     setMenuItems([...restaurant.menuItems]);
     setActiveSheet("none");
   };
 
-  const handleEditSubmit = (data: { name: string; price: number; description: string; image: string | null }) => {
+  const handleEditSubmit = (data: { name: string; price: number; description: string; image: string | null; images: string[] }) => {
     if (!selectedItem) return;
     const restaurant = updateMenuItem(selectedItem.id, {
       name: data.name,
       price: data.price,
       description: data.description,
       image: data.image,
+      images: data.images,
     });
     setMenuItems([...restaurant.menuItems]);
     setSelectedItem(null);

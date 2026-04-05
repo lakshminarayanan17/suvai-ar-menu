@@ -55,7 +55,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const reticleRef = useRef<THREE.Group | null>(null);
   const savedPoseRef = useRef<{ x: number; y: number; z: number } | null>(null);
 
-  const validItems = menuItems.filter((m) => m.image);
+  const validItems = menuItems.filter((m) => m.image || (m.images && m.images.length > 0));
   const currentItem = validItems[currentIndex];
 
   const loadedModelIndexRef = useRef<number>(-1);
@@ -70,7 +70,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       if (modelBlobUrlRef.current) {
         URL.revokeObjectURL(modelBlobUrlRef.current);
       }
-      const url = await generatePlateGLBFromUrl(item.image);
+      const allImages = item.images && item.images.length > 0 ? item.images : undefined;
+      const url = await generatePlateGLBFromUrl(item.image, allImages);
       modelBlobUrlRef.current = url;
 
       const loader = new GLTFLoader();
