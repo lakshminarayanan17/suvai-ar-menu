@@ -52,7 +52,8 @@ function prepareFoodImage(dataUrl: string, maxSize: number): Promise<Uint8Array>
   });
 }
 
-// Stitch side images into a horizontal panoramic strip for wrapping around cylinder
+// Stitch side images into a horizontal panoramic strip for wrapping around cylinder.
+// Each image is crop-to-fill (no stretching) and repeated to fill 360° seamlessly.
 async function createSideStrip(sideDataUrls: string[], width: number, height: number): Promise<Uint8Array> {
   const imgs = await Promise.all(sideDataUrls.map(loadImg));
   const canvas = document.createElement("canvas");
@@ -61,9 +62,40 @@ async function createSideStrip(sideDataUrls: string[], width: number, height: nu
   const ctx = canvas.getContext("2d")!;
 
   const count = imgs.length;
-  const sliceW = width / count;
-  for (let i = 0; i < count; i++) {
-    ctx.drawImage(imgs[i], i * sliceW, 0, sliceW, height);
+  // Repeat images to fill the full panorama (e.g., 2 images → each appears multiple times)
+  const totalSlices = Math.max(count * 2, 6); // at least 6 slices for smooth wrap
+  const sliceW = width / totalSlices;
+
+  for (let s = 0; s < totalSlices; s++) {
+    const img = imgs[s % count];
+    // Crop-to-fill: maintain aspect ratio, crop excess
+    const imgAspect = img.width / img.height;
+    const sliceAspect = sliceW / height;
+
+    let sx = 0, sy = 0, sw = img.width, sh = img.height;
+    if (imgAspect > sliceAspect) {
+      // Image wider than slice — crop sides
+      sw = img.height * sliceAspect;
+      sx = (img.width - sw) / 2;
+    } else {
+      // Image taller than slice — crop top/bottom
+      sh = img.width / sliceAspect;
+      sy = (img.height - sh) / 2;
+    }
+
+    ctx.drawImage(img, sx, sy, sw, sh, s * sliceW, 0, sliceW, height);
+  }
+
+  // Smooth seams with subtle vertical gradient blending at edges
+  for (let s = 1; s < totalSlices; s++) {
+    const seamX = s * sliceW;
+    const blendW = sliceW * 0.15;
+    const grad = ctx.createLinearGradient(seamX - blendW, 0, seamX + blendW, 0);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(0.5, "rgba(0,0,0,0.08)");
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(seamX - blendW, 0, blendW * 2, height);
   }
 
   return canvasToBytes(canvas);
@@ -260,7 +292,7 @@ export async function generatePlateGLBFromUrl(imageDataUrl: string, allImages?: 
     // Multi-image: image 1 = top, rest = side wall panorama
     const topImageBytes = await prepareFoodImage(allImages[0], 1024);
     const sideImages = allImages.slice(1);
-    const sideStripBytes = await createSideStrip(sideImages, 2048, 512);
+    const sideStripBytes = await createSideStrip(sideImages, 2048, 1024);
 
     const glbBytes = buildMultiImageGLB(topImageBytes, sideStripBytes, plateImageBytes, allImages.length);
     const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
@@ -371,7 +403,7 @@ function assemblGLB(meshes: Mesh[], imageBytesList: Uint8Array[], materials: Rec
     meshes: [{ primitives }],
     materials,
     textures: imageBytesList.map((_, i) => ({ source: i, sampler: 0 })),
-    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
+    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 33071 }],
     images: imageViewIndices.map((bvIdx) => ({ bufferView: bvIdx, mimeType: "image/jpeg" })),
     accessors,
     bufferViews: bufferViews.map((bv) =>
