@@ -11,40 +11,20 @@ interface ARViewerProps {
   restaurantName: string;
 }
 
-// Create a simple plate-like reticle ring (instant, no GLB needed)
+// Simple reticle ring for visual feedback while scanning
 function createReticle(): THREE.Group {
   const group = new THREE.Group();
-
-  // Outer ring
-  const ringGeo = new THREE.RingGeometry(0.1, 0.12, 48);
+  const ringGeo = new THREE.RingGeometry(0.08, 0.1, 48);
   ringGeo.rotateX(-Math.PI / 2);
   const ringMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.8,
-    side: THREE.DoubleSide,
+    color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide,
   });
   group.add(new THREE.Mesh(ringGeo, ringMat));
 
-  // Inner subtle fill
-  const discGeo = new THREE.CircleGeometry(0.1, 48);
-  discGeo.rotateX(-Math.PI / 2);
-  const discMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.15,
-    side: THREE.DoubleSide,
-  });
-  group.add(new THREE.Mesh(discGeo, discMat));
-
-  // Small center dot
-  const dotGeo = new THREE.CircleGeometry(0.015, 24);
+  const dotGeo = new THREE.CircleGeometry(0.012, 24);
   dotGeo.rotateX(-Math.PI / 2);
   const dotMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.6,
-    side: THREE.DoubleSide,
+    color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
   });
   const dot = new THREE.Mesh(dotGeo, dotMat);
   dot.position.y = 0.001;
@@ -73,6 +53,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const placedModelRef = useRef<THREE.Group | null>(null);
   const modelBlobUrlRef = useRef<string | null>(null);
   const reticleRef = useRef<THREE.Group | null>(null);
+  const savedPoseRef = useRef<{ x: number; y: number; z: number } | null>(null);
 
   const validItems = menuItems.filter((m) => m.image);
   const currentItem = validItems[currentIndex];
@@ -125,39 +106,37 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // Place food model at reticle position
-  const placeFood = useCallback(() => {
-    if (!reticleRef.current || !reticleRef.current.visible) return;
-    if (!foodModelRef.current || !sceneRef.current) return;
-
-    const pos = reticleRef.current.position.clone();
+  // Place model at saved position
+  const placeModel = useCallback(() => {
+    if (!foodModelRef.current || !sceneRef.current || !savedPoseRef.current) return;
 
     const model = foodModelRef.current.clone();
-    model.position.copy(pos);
+    const p = savedPoseRef.current;
+    model.position.set(p.x, p.y, p.z);
     model.rotation.set(0, 0, 0);
 
     if (placedModelRef.current) {
       sceneRef.current.remove(placedModelRef.current);
     }
 
+    // Hide reticle
+    if (reticleRef.current) reticleRef.current.visible = false;
+
     sceneRef.current.add(model);
     placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
-
-    // Hide reticle after placing
-    reticleRef.current.visible = false;
-    // Stop hit testing
-    hitTestSourceRef.current = null;
-
     setPlaced(true);
   }, []);
 
-  // Dish switch — swap model when navigating between items while placed
+  // Deferred placement: model just loaded + we have a saved surface pose → place now
   useEffect(() => {
     if (!modelReady || !arActive) return;
     if (!foodModelRef.current || !sceneRef.current) return;
 
-    if (placed && placedModelRef.current) {
+    if (!placed && savedPoseRef.current) {
+      placeModel();
+    } else if (placed && placedModelRef.current) {
+      // Dish switch
       if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
       const oldPos = placedModelRef.current.position.clone();
       sceneRef.current.remove(placedModelRef.current);
@@ -169,7 +148,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       placedModelRef.current = newModel;
       placedModelIndexRef.current = loadedModelIndexRef.current;
     }
-  }, [modelReady, arActive, placed]);
+  }, [modelReady, arActive, placed, placeModel]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -199,10 +178,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     canvasRef.current = canvas;
 
     const renderer = new THREE.WebGLRenderer({
-      canvas,
-      alpha: true,
-      antialias: true,
-      powerPreference: "high-performance",
+      canvas, alpha: true, antialias: true, powerPreference: "high-performance",
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
@@ -227,7 +203,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     scene.add(fillLight);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.8));
 
-    // Add reticle to scene
+    // Reticle for visual feedback
     const reticle = createReticle();
     scene.add(reticle);
     reticleRef.current = reticle;
@@ -248,13 +224,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
       hitTestSourceRef.current = hitTestSource ?? null;
 
-      // Tap to place
-      session.addEventListener("select", () => {
-        if (reticleRef.current?.visible && foodModelRef.current) {
-          placeFood();
-        }
-      });
-
       session.addEventListener("end", () => {
         setArActive(false);
         setPlaced(false);
@@ -262,31 +231,52 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         hitTestSourceRef.current = null;
         sessionRef.current = null;
         reticleRef.current = null;
+        savedPoseRef.current = null;
         if (canvasRef.current?.parentNode) canvasRef.current.parentNode.removeChild(canvasRef.current);
         rendererRef.current?.dispose();
         rendererRef.current = null;
       });
+
+      let autoPlaced = false;
 
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — move reticle to surface
-        if (hitTestSourceRef.current && reticleRef.current) {
+        if (hitTestSourceRef.current && !autoPlaced) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
-              reticleRef.current.visible = true;
-              reticleRef.current.position.set(
-                pose.transform.position.x,
-                pose.transform.position.y,
-                pose.transform.position.z
-              );
-              reticleRef.current.updateMatrixWorld(true);
+              const p = pose.transform.position;
+
+              // Show reticle at surface
+              if (reticleRef.current) {
+                reticleRef.current.visible = true;
+                reticleRef.current.position.set(p.x, p.y, p.z);
+                reticleRef.current.updateMatrixWorld(true);
+              }
               setSurfaceFound(true);
+
+              // Save pose
+              savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
+
+              // Auto-place if model ready
+              if (foodModelRef.current) {
+                const model = foodModelRef.current.clone();
+                model.position.set(p.x, p.y, p.z);
+                model.rotation.set(0, 0, 0);
+
+                if (reticleRef.current) reticleRef.current.visible = false;
+                scene.add(model);
+                placedModelRef.current = model;
+                placedModelIndexRef.current = loadedModelIndexRef.current;
+                autoPlaced = true;
+                setPlaced(true);
+                hitTestSourceRef.current = null;
+              }
             }
           }
         }
@@ -297,7 +287,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       console.error("WebXR session failed:", err);
       setError(`AR failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [placeFood]);
+  }, []);
 
   // Cleanup
   useEffect(() => {
@@ -327,7 +317,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
 
-      {/* Launch screen — dish preview + AR button */}
+      {/* Launch screen */}
       {!arActive && (
         <div className="absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black">
           {currentItem?.image && (
@@ -358,41 +348,22 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Guide message — before placement */}
+          {/* Loading indicator */}
           {!placed && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
             >
-              {!surfaceFound ? (
-                <>
-                  <div className="relative w-12 h-12">
-                    <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
-                    <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
-                  </div>
-                  <p className="text-white text-[14px] font-medium">Scanning your table...</p>
-                  <p className="text-white/50 text-[12px]">Move your phone slowly</p>
-                </>
-              ) : !modelReady ? (
-                <>
-                  <div className="relative w-12 h-12">
-                    <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
-                    <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
-                  </div>
-                  <p className="text-white text-[14px] font-medium">Marinating the flavours...</p>
-                  <p className="text-white/50 text-[12px]">Almost ready to serve</p>
-                </>
-              ) : (
-                <>
-                  {/* Tap icon */}
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" className="opacity-90">
-                    <circle cx="24" cy="20" r="8" stroke="white" strokeWidth="2" fill="none" />
-                    <path d="M24 28v12M20 36l4 4 4-4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <p className="text-white text-[14px] font-medium">Tap the circle to serve</p>
-                  <p className="text-white/50 text-[12px]">Place your dish on the table</p>
-                </>
-              )}
+              <div className="relative w-12 h-12">
+                <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
+                <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
+              </div>
+              <p className="text-white text-[14px] font-medium">
+                {!surfaceFound ? "Scanning your table..." : "Plating your dish..."}
+              </p>
+              <p className="text-white/50 text-[12px]">
+                {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
+              </p>
             </div>
           )}
 
