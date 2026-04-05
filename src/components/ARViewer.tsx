@@ -119,8 +119,13 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       sceneRef.current.remove(placedModelRef.current);
     }
 
-    // Hide reticle
-    if (reticleRef.current) reticleRef.current.visible = false;
+    // Hide reticle and stop hit testing
+    if (reticleRef.current) {
+      reticleRef.current.visible = false;
+      if (sceneRef.current) sceneRef.current.remove(reticleRef.current);
+      reticleRef.current = null;
+    }
+    hitTestSourceRef.current = null;
 
     sceneRef.current.add(model);
     placedModelRef.current = model;
@@ -331,36 +336,37 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Loading / tap-to-place */}
-          {!placed && (
+          {/* Loading state */}
+          {!placed && !(surfaceFound && modelReady) && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
             >
-              {surfaceFound && modelReady ? (
-                <>
-                  <button
-                    onClick={() => placeModel()}
-                    className="bg-white rounded-full px-8 py-3 active:bg-white/80"
-                  >
-                    <span className="text-black font-semibold text-[16px]">Tap to serve 🍽️</span>
-                  </button>
-                  <p className="text-white/50 text-[12px]">Place your dish on the table</p>
-                </>
-              ) : (
-                <>
-                  <div className="relative w-12 h-12">
-                    <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
-                    <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
-                  </div>
-                  <p className="text-white text-[14px] font-medium">
-                    {!surfaceFound ? "Scanning your table..." : "Marinating the flavours..."}
-                  </p>
-                  <p className="text-white/50 text-[12px]">
-                    {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
-                  </p>
-                </>
-              )}
+              <div className="relative w-12 h-12">
+                <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
+                <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
+              </div>
+              <p className="text-white text-[14px] font-medium">
+                {!surfaceFound ? "Scanning your table..." : "Marinating the flavours..."}
+              </p>
+              <p className="text-white/50 text-[12px]">
+                {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
+              </p>
+            </div>
+          )}
+
+          {/* Tap anywhere to place — invisible full-screen tap zone */}
+          {!placed && surfaceFound && modelReady && (
+            <div
+              className="absolute inset-0 z-[35]"
+              onClick={() => placeModel()}
+            >
+              <div
+                className="absolute bottom-[120px] left-[50%] -translate-x-1/2 px-6 py-3 rounded-full"
+                style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
+              >
+                <p className="text-white text-[14px] font-medium whitespace-nowrap">Tap anywhere to place</p>
+              </div>
             </div>
           )}
 

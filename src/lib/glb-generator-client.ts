@@ -233,10 +233,10 @@ export async function generatePlateGLBFromUrl(imageDataUrl: string): Promise<str
 // ---- GLB Builder ----
 
 function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): ArrayBuffer {
-  // Plate: r=0.15m (30cm diameter) — full dinner plate size
-  // Food disc: r=0.12m (24cm) — covers most of plate, leaves ring gap visible
-  const plate = createPlate(0.15, 0.003);
-  const foodDisc = createFoodDisc(0.12, 0.003);
+  // Plate: r=0.20m (40cm diameter) — large visible plate
+  // Food disc: r=0.16m (32cm) — big food, clear ring gap around it
+  const plate = createPlate(0.20, 0.003);
+  const foodDisc = createFoodDisc(0.16, 0.003);
 
   const meshes = [plate, foodDisc];
 
