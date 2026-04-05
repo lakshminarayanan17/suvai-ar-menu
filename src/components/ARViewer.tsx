@@ -260,9 +260,14 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             if (pose) {
               const p = pose.transform.position;
               reticleRef.current.visible = true;
-              reticleRef.current.position.set(p.x, p.y, p.z);
+              // Smooth lerp for uniform movement (no jitter)
+              const lerp = 0.15;
+              const cur = reticleRef.current.position;
+              cur.x += (p.x - cur.x) * lerp;
+              cur.y += (p.y - cur.y) * lerp;
+              cur.z += (p.z - cur.z) * lerp;
               reticleRef.current.updateMatrixWorld(true);
-              savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
+              savedPoseRef.current = { x: cur.x, y: cur.y, z: cur.z };
               setSurfaceFound(true);
             }
           }
