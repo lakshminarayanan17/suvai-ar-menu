@@ -173,35 +173,51 @@ function createPlate(radius: number, thickness: number): Mesh {
   return { positions, normals, uvs, indices };
 }
 
-// Food — FLAT disc sitting just above the plate surface. No dome, no curve.
-// The food photo itself provides the 3D appearance.
+// Food — gentle mound sitting on the plate. Not puffed, just natural food volume.
+// 1.5cm height with smooth cosine falloff — like real food piled on a plate.
 function createFoodDisc(radius: number, yBase: number): Mesh {
+  const RINGS = 12;
+  const height = 0.015; // 1.5cm gentle rise
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  // Single flat circle — just 1mm above plate
-  const y = yBase + 0.001;
-
-  // Center
-  positions.push(0, y, 0);
+  // Center vertex (highest point)
+  positions.push(0, yBase + height + 0.001, 0);
   normals.push(0, 1, 0);
   uvs.push(0.5, 0.5);
 
-  for (let i = 0; i <= SEG; i++) {
-    const a = (i / SEG) * Math.PI * 2;
-    const cx = Math.cos(a);
-    const sz = Math.sin(a);
-    positions.push(cx * radius, y, sz * radius);
-    normals.push(0, 1, 0);
-    // Use inner 84% of image to crop out background edges
-    const uvScale = 0.42;
-    uvs.push(0.5 + cx * uvScale, 0.5 + sz * uvScale);
+  for (let ring = 1; ring <= RINGS; ring++) {
+    const t = ring / RINGS; // 0=center, 1=edge
+    const r = t * radius;
+    // Smooth cosine falloff — gentle, not a dome
+    const profile = Math.cos(t * Math.PI * 0.5);
+    const y = yBase + 0.001 + height * profile * profile;
+
+    for (let i = 0; i <= SEG; i++) {
+      const a = (i / SEG) * Math.PI * 2;
+      const cx = Math.cos(a);
+      const sz = Math.sin(a);
+      positions.push(cx * r, y, sz * r);
+      normals.push(0, 1, 0);
+      const uvScale = 0.42;
+      uvs.push(0.5 + cx * t * uvScale, 0.5 + sz * t * uvScale);
+    }
   }
 
+  // Center to first ring
   for (let i = 0; i < SEG; i++) {
     indices.push(0, 1 + i, 1 + i + 1);
+  }
+  // Between rings
+  for (let ring = 0; ring < RINGS - 1; ring++) {
+    const start = 1 + ring * (SEG + 1);
+    const next = start + (SEG + 1);
+    for (let i = 0; i < SEG; i++) {
+      indices.push(start + i, next + i, start + i + 1);
+      indices.push(start + i + 1, next + i, next + i + 1);
+    }
   }
 
   return { positions, normals, uvs, indices };

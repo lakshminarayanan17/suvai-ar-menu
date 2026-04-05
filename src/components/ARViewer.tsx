@@ -60,6 +60,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
+  const isPlacedRef = useRef(false); // immediate flag for animation loop
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -119,13 +120,14 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       sceneRef.current.remove(placedModelRef.current);
     }
 
-    // Hide reticle and stop hit testing
+    // IMMEDIATELY stop hit testing and hide reticle
+    isPlacedRef.current = true;
+    hitTestSourceRef.current = null;
     if (reticleRef.current) {
       reticleRef.current.visible = false;
-      if (sceneRef.current) sceneRef.current.remove(reticleRef.current);
+      sceneRef.current.remove(reticleRef.current);
       reticleRef.current = null;
     }
-    hitTestSourceRef.current = null;
 
     sceneRef.current.add(model);
     placedModelRef.current = model;
@@ -233,6 +235,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         setArActive(false);
         setPlaced(false);
         setSurfaceFound(false);
+        isPlacedRef.current = false;
         hitTestSourceRef.current = null;
         sessionRef.current = null;
         reticleRef.current = null;
@@ -247,8 +250,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Track reticle on surface (keeps updating until placed)
-        if (hitTestSourceRef.current && reticleRef.current) {
+        // Track reticle on surface (stops immediately when placed)
+        if (!isPlacedRef.current && hitTestSourceRef.current && reticleRef.current) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
