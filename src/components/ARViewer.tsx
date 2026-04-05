@@ -259,6 +259,11 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           }
         }
 
+        // Slow rotation for placed model
+        if (placedModelRef.current) {
+          placedModelRef.current.rotation.y += 0.003;
+        }
+
         renderer.render(scene, camera);
       });
     } catch (err) {
