@@ -237,46 +237,24 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      let autoPlaced = false;
-
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        if (hitTestSourceRef.current && !autoPlaced) {
+        // Track reticle on surface (keeps updating until placed)
+        if (hitTestSourceRef.current && reticleRef.current) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const p = pose.transform.position;
-
-              // Show reticle at surface
-              if (reticleRef.current) {
-                reticleRef.current.visible = true;
-                reticleRef.current.position.set(p.x, p.y, p.z);
-                reticleRef.current.updateMatrixWorld(true);
-              }
-              setSurfaceFound(true);
-
-              // Save pose
+              reticleRef.current.visible = true;
+              reticleRef.current.position.set(p.x, p.y, p.z);
+              reticleRef.current.updateMatrixWorld(true);
               savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
-
-              // Auto-place if model ready
-              if (foodModelRef.current) {
-                const model = foodModelRef.current.clone();
-                model.position.set(p.x, p.y, p.z);
-                model.rotation.set(0, 0, 0);
-
-                if (reticleRef.current) reticleRef.current.visible = false;
-                scene.add(model);
-                placedModelRef.current = model;
-                placedModelIndexRef.current = loadedModelIndexRef.current;
-                autoPlaced = true;
-                setPlaced(true);
-                hitTestSourceRef.current = null;
-              }
+              setSurfaceFound(true);
             }
           }
         }
@@ -348,22 +326,36 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Loading indicator */}
+          {/* Loading / tap-to-place */}
           {!placed && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
             >
-              <div className="relative w-12 h-12">
-                <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
-                <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
-              </div>
-              <p className="text-white text-[14px] font-medium">
-                {!surfaceFound ? "Scanning your table..." : "Plating your dish..."}
-              </p>
-              <p className="text-white/50 text-[12px]">
-                {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
-              </p>
+              {surfaceFound && modelReady ? (
+                <>
+                  <button
+                    onClick={() => placeModel()}
+                    className="bg-white rounded-full px-8 py-3 active:bg-white/80"
+                  >
+                    <span className="text-black font-semibold text-[16px]">Tap to serve 🍽️</span>
+                  </button>
+                  <p className="text-white/50 text-[12px]">Place your dish on the table</p>
+                </>
+              ) : (
+                <>
+                  <div className="relative w-12 h-12">
+                    <div className="absolute inset-0 rounded-full border-[3px] border-white/20" />
+                    <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
+                  </div>
+                  <p className="text-white text-[14px] font-medium">
+                    {!surfaceFound ? "Scanning your table..." : "Marinating the flavours..."}
+                  </p>
+                  <p className="text-white/50 text-[12px]">
+                    {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
+                  </p>
+                </>
+              )}
             </div>
           )}
 
