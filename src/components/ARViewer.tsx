@@ -219,7 +219,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     try {
       const session = await navigator.xr!.requestSession("immersive-ar", {
         requiredFeatures: ["hit-test"],
-        optionalFeatures: ["dom-overlay"],
+        optionalFeatures: ["dom-overlay", "anchors"],
         domOverlay: { root: containerRef.current },
       });
 
@@ -273,9 +273,9 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           }
         }
 
-        // Slow rotation for placed model
-        if (placedModelRef.current) {
-          placedModelRef.current.rotation.y += 0.003;
+        // Slow rotation for placed model (rotate around its own Y axis)
+        if (isPlacedRef.current && placedModelRef.current) {
+          placedModelRef.current.rotateY(0.004);
         }
 
         renderer.render(scene, camera);
