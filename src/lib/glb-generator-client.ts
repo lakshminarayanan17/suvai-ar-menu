@@ -1,10 +1,7 @@
 // Browser-compatible GLB generator
-// Creates a realistic food-on-plate model:
-// - Plate: clean concentric ring design (black rim, orange/white bands)
-// - Food: 3D mound sitting in center with clear plate gap around it
+// Clean plate with thin concentric rings + flat food image on top
 
 const SEG = 48;
-const FOOD_RINGS = 16;
 
 interface Mesh {
   positions: number[];
@@ -15,7 +12,6 @@ interface Mesh {
 
 // ---- Image Utilities ----
 
-// Resize food image and crop to circle (avoids background bleed at edges)
 function prepareFoodImage(dataUrl: string, maxSize: number): Promise<{ bytes: Uint8Array; mime: string }> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -29,10 +25,7 @@ function prepareFoodImage(dataUrl: string, maxSize: number): Promise<{ bytes: Ui
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d")!;
-
-      // Draw image
       ctx.drawImage(img, 0, 0, w, h);
-
       canvas.toBlob((blob) => {
         if (!blob) return reject(new Error("Canvas toBlob failed"));
         blob.arrayBuffer().then((buf) => {
@@ -45,7 +38,8 @@ function prepareFoodImage(dataUrl: string, maxSize: number): Promise<{ bytes: Ui
   });
 }
 
-// Generate plate texture with concentric rings matching reference design
+// Generate plate texture — matches reference exactly:
+// thin black edge → cream → thin orange ring → cream → thin orange ring → cream center
 function generatePlateTexture(): Uint8Array {
   const size = 512;
   const canvas = document.createElement("canvas");
@@ -54,29 +48,47 @@ function generatePlateTexture(): Uint8Array {
   const ctx = canvas.getContext("2d")!;
 
   const cx = size / 2, cy = size / 2;
+  const cream = "#F0EBE0";
+  const orange = "#CC7F4E";
+  const black = "#1A1A1A";
 
-  // Transparent background (won't be seen — plate mesh covers it)
-  ctx.clearRect(0, 0, size, size);
+  // Draw from outside in
+  // Full circle black (very thin rim)
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.500, 0, Math.PI * 2);
+  ctx.fillStyle = black;
+  ctx.fill();
 
-  // Draw concentric rings from outside in
-  const rings: [number, string][] = [
-    [0.500, "#1C1C1C"],   // Black outer rim
-    [0.480, "#2A2A2A"],   // Dark rim inner edge
-    [0.465, "#F2EDE4"],   // Cream/white band
-    [0.415, "#D48B5E"],   // Orange band (outer)
-    [0.385, "#F2EDE4"],   // Cream/white band
-    [0.340, "#D48B5E"],   // Orange band (inner)
-    [0.310, "#F2EDE4"],   // Cream/white center area
-  ];
+  // Cream (main outer band)
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.480, 0, Math.PI * 2);
+  ctx.fillStyle = cream;
+  ctx.fill();
 
-  for (const [radiusFraction, color] of rings) {
-    ctx.beginPath();
-    ctx.arc(cx, cy, size * radiusFraction, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-  }
+  // Outer orange ring (thin)
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.430, 0, Math.PI * 2);
+  ctx.fillStyle = orange;
+  ctx.fill();
 
-  // Convert to JPEG bytes synchronously
+  // Cream between rings
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.410, 0, Math.PI * 2);
+  ctx.fillStyle = cream;
+  ctx.fill();
+
+  // Inner orange ring (thin)
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.370, 0, Math.PI * 2);
+  ctx.fillStyle = orange;
+  ctx.fill();
+
+  // Cream center (large — this is where food sits)
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.350, 0, Math.PI * 2);
+  ctx.fillStyle = cream;
+  ctx.fill();
+
   const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
   const base64 = dataUrl.split(",")[1];
   const binaryString = atob(base64);
@@ -89,16 +101,15 @@ function generatePlateTexture(): Uint8Array {
 
 // ---- Geometry Builders ----
 
-// Plate — flat disc with concentric ring texture
+// Plate — flat disc with ring texture
 function createPlate(radius: number, thickness: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  // Top face — full circle with rings (more segments for smoother rings)
   const PLATE_RINGS = 12;
-  // Center vertex
+  // Center
   positions.push(0, thickness, 0);
   normals.push(0, 1, 0);
   uvs.push(0.5, 0.5);
@@ -114,11 +125,9 @@ function createPlate(radius: number, thickness: number): Mesh {
     }
   }
 
-  // Center to first ring
   for (let i = 0; i < SEG; i++) {
     indices.push(0, 1 + i, 1 + i + 1);
   }
-  // Between rings
   for (let ring = 0; ring < PLATE_RINGS - 1; ring++) {
     const start = 1 + ring * (SEG + 1);
     const next = start + (SEG + 1);
@@ -146,7 +155,7 @@ function createPlate(radius: number, thickness: number): Mesh {
     indices.push(a + 2, a + 1, a + 3);
   }
 
-  // Bottom face
+  // Bottom
   const botBase = positions.length / 3;
   positions.push(0, 0, 0);
   normals.push(0, -1, 0);
@@ -164,82 +173,35 @@ function createPlate(radius: number, thickness: number): Mesh {
   return { positions, normals, uvs, indices };
 }
 
-// Food mound — natural 3D volume, smaller than plate for visible gap
-function createFoodMound(radius: number, height: number, yBase: number): Mesh {
+// Food — FLAT disc sitting just above the plate surface. No dome, no curve.
+// The food photo itself provides the 3D appearance.
+function createFoodDisc(radius: number, yBase: number): Mesh {
   const positions: number[] = [];
   const normals: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
 
-  // Top surface (bell-curve mound)
-  positions.push(0, yBase + height, 0);
+  // Single flat circle — just 1mm above plate
+  const y = yBase + 0.001;
+
+  // Center
+  positions.push(0, y, 0);
   normals.push(0, 1, 0);
   uvs.push(0.5, 0.5);
 
-  for (let ring = 1; ring <= FOOD_RINGS; ring++) {
-    const t = ring / FOOD_RINGS;
-    const ringR = t * radius;
-    // Bell curve profile: natural food-pile shape
-    const profile = Math.cos(t * Math.PI * 0.5);
-    const y = yBase + height * profile * profile;
-
-    for (let lon = 0; lon <= SEG; lon++) {
-      const lonAngle = (lon / SEG) * Math.PI * 2;
-      const cx = Math.cos(lonAngle);
-      const sz = Math.sin(lonAngle);
-      positions.push(cx * ringR, y, sz * ringR);
-
-      // Normal from bell curve slope
-      const dydR = -height * 2 * profile * Math.sin(t * Math.PI * 0.5) * (Math.PI * 0.5) / radius;
-      const nx = cx * (-dydR);
-      const ny = 1.0;
-      const nz = sz * (-dydR);
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      normals.push(nx / len, ny / len, nz / len);
-
-      // UV: use inner 85% of image to avoid edge background bleed
-      const uvScale = 0.42;
-      const u = 0.5 + (cx * t) * uvScale;
-      const v = 0.5 + (sz * t) * uvScale;
-      uvs.push(u, v);
-    }
+  for (let i = 0; i <= SEG; i++) {
+    const a = (i / SEG) * Math.PI * 2;
+    const cx = Math.cos(a);
+    const sz = Math.sin(a);
+    positions.push(cx * radius, y, sz * radius);
+    normals.push(0, 1, 0);
+    // Use inner 84% of image to crop out background edges
+    const uvScale = 0.42;
+    uvs.push(0.5 + cx * uvScale, 0.5 + sz * uvScale);
   }
 
-  // Top triangles: center to first ring
-  for (let lon = 0; lon < SEG; lon++) {
-    indices.push(0, 1 + lon, 1 + lon + 1);
-  }
-  // Top triangles: between rings
-  for (let ring = 0; ring < FOOD_RINGS - 1; ring++) {
-    const ringStart = 1 + ring * (SEG + 1);
-    const nextRingStart = ringStart + (SEG + 1);
-    for (let lon = 0; lon < SEG; lon++) {
-      const a = ringStart + lon;
-      const b = nextRingStart + lon;
-      indices.push(a, b, a + 1);
-      indices.push(a + 1, b, b + 1);
-    }
-  }
-
-  // Side wall (gives thickness to the food edge)
-  const sideBase = positions.length / 3;
-  for (let lon = 0; lon <= SEG; lon++) {
-    const lonAngle = (lon / SEG) * Math.PI * 2;
-    const cx = Math.cos(lonAngle);
-    const sz = Math.sin(lonAngle);
-    // Top of side (outermost ring y = yBase since profile=0 at t=1)
-    positions.push(cx * radius, yBase + 0.002, sz * radius);
-    normals.push(cx, 0, sz);
-    uvs.push(lon / SEG, 1);
-    // Bottom of side
-    positions.push(cx * radius, yBase, sz * radius);
-    normals.push(cx, 0, sz);
-    uvs.push(lon / SEG, 0);
-  }
-  for (let lon = 0; lon < SEG; lon++) {
-    const a = sideBase + lon * 2;
-    indices.push(a, a + 1, a + 2);
-    indices.push(a + 2, a + 1, a + 3);
+  for (let i = 0; i < SEG; i++) {
+    indices.push(0, 1 + i, 1 + i + 1);
   }
 
   return { positions, normals, uvs, indices };
@@ -271,15 +233,12 @@ export async function generatePlateGLBFromUrl(imageDataUrl: string): Promise<str
 // ---- GLB Builder ----
 
 function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): ArrayBuffer {
-  // Proportions:
-  // Plate:      r=0.14m (28cm diameter), 0.004m thick — clean ring design
-  // Food mound: r=0.08m (16cm diameter), h=0.03m (3cm) — natural 3D pile
-  // Gap:        6cm visible plate around food on all sides
+  // Plate: r=0.13m (26cm diameter)
+  // Food disc: r=0.09m (18cm) — flat, covers center, leaves plate ring visible
+  const plate = createPlate(0.13, 0.003);
+  const foodDisc = createFoodDisc(0.09, 0.003);
 
-  const plate = createPlate(0.14, 0.004);
-  const foodMound = createFoodMound(0.08, 0.03, 0.004);
-
-  const meshes = [plate, foodMound];
+  const meshes = [plate, foodDisc];
 
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
@@ -326,13 +285,13 @@ function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): Arra
     totalBinSize += idxBytes + idxPad;
   }
 
-  // Plate image (texture 0)
+  // Plate image
   const plateImageViewIdx = bufferViews.length;
   const platePad = (4 - (plateImageBytes.byteLength % 4)) % 4;
   bufferViews.push({ byteOffset: totalBinSize, byteLength: plateImageBytes.byteLength, target: 0 });
   totalBinSize += plateImageBytes.byteLength + platePad;
 
-  // Food image (texture 1)
+  // Food image
   const foodImageViewIdx = bufferViews.length;
   bufferViews.push({ byteOffset: totalBinSize, byteLength: foodImageBytes.byteLength, target: 0 });
   totalBinSize += foodImageBytes.byteLength;
@@ -360,7 +319,6 @@ function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): Arra
       ],
     }],
     materials: [
-      // Plate — textured with concentric ring design
       {
         name: "Plate",
         pbrMetallicRoughness: {
@@ -369,7 +327,6 @@ function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): Arra
           roughnessFactor: 0.4,
         },
       },
-      // Food — textured with dish image
       {
         name: "Food",
         pbrMetallicRoughness: {
@@ -424,7 +381,6 @@ function buildGLB(foodImageBytes: Uint8Array, plateImageBytes: Uint8Array): Arra
   dv.setUint32(off, paddedBinSize, true); off += 4;
   dv.setUint32(off, 0x004e4942, true); off += 4;
 
-  // Mesh data
   for (const mesh of meshes) {
     for (const v of mesh.positions) { dv.setFloat32(off, v, true); off += 4; }
     for (const v of mesh.normals) { dv.setFloat32(off, v, true); off += 4; }
