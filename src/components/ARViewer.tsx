@@ -251,29 +251,54 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Track reticle on surface (stops immediately when placed)
-        if (!isPlacedRef.current && hitTestSourceRef.current && reticleRef.current) {
+        // Hit test — find surface, show reticle, auto-place when model ready
+        if (!isPlacedRef.current && hitTestSourceRef.current) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const p = pose.transform.position;
-              reticleRef.current.visible = true;
-              // Smooth lerp for uniform movement (no jitter)
-              const lerp = 0.15;
-              const cur = reticleRef.current.position;
-              cur.x += (p.x - cur.x) * lerp;
-              cur.y += (p.y - cur.y) * lerp;
-              cur.z += (p.z - cur.z) * lerp;
-              reticleRef.current.updateMatrixWorld(true);
-              savedPoseRef.current = { x: cur.x, y: cur.y, z: cur.z };
+
+              // Show reticle with smooth lerp
+              if (reticleRef.current) {
+                reticleRef.current.visible = true;
+                const lerp = 0.15;
+                const cur = reticleRef.current.position;
+                cur.x += (p.x - cur.x) * lerp;
+                cur.y += (p.y - cur.y) * lerp;
+                cur.z += (p.z - cur.z) * lerp;
+              }
+
+              // Save pose for deferred placement
+              savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
               setSurfaceFound(true);
+
+              // AUTO-PLACE: if model is ready, place immediately
+              if (foodModelRef.current) {
+                const model = foodModelRef.current.clone();
+                model.position.set(p.x, p.y, p.z);
+                model.rotation.set(0, 0, 0);
+
+                // Remove reticle
+                isPlacedRef.current = true;
+                hitTestSourceRef.current = null;
+                if (reticleRef.current) {
+                  reticleRef.current.visible = false;
+                  scene.remove(reticleRef.current);
+                  reticleRef.current = null;
+                }
+
+                scene.add(model);
+                placedModelRef.current = model;
+                placedModelIndexRef.current = loadedModelIndexRef.current;
+                setPlaced(true);
+              }
             }
           }
         }
 
-        // Slow rotation for placed model (rotate around its own Y axis)
+        // Slow rotation for placed model
         if (isPlacedRef.current && placedModelRef.current) {
           placedModelRef.current.rotateY(0.004);
         }
@@ -345,8 +370,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Loading state */}
-          {!placed && !(surfaceFound && modelReady) && (
+          {/* Loading state — shows until model is auto-placed */}
+          {!placed && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
@@ -356,26 +381,11 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
               </div>
               <p className="text-white text-[14px] font-medium">
-                {!surfaceFound ? "Scanning your table..." : "Marinating the flavours..."}
+                {!surfaceFound ? "Scanning your table..." : !modelReady ? "Marinating the flavours..." : "Plating your dish..."}
               </p>
               <p className="text-white/50 text-[12px]">
                 {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
               </p>
-            </div>
-          )}
-
-          {/* Tap anywhere to place — invisible full-screen tap zone */}
-          {!placed && surfaceFound && modelReady && (
-            <div
-              className="absolute inset-0 z-[35]"
-              onClick={() => placeModel()}
-            >
-              <div
-                className="absolute bottom-[120px] left-[50%] -translate-x-1/2 px-6 py-3 rounded-full"
-                style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
-              >
-                <p className="text-white text-[14px] font-medium whitespace-nowrap">Tap anywhere to place</p>
-              </div>
             </div>
           )}
 
