@@ -61,23 +61,29 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
   const isPlacedRef = useRef(false); // immediate flag for animation loop
+  const hitCountRef = useRef(0); // count stable hit test frames before auto-placing
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
-    if (!item.image) return;
+    const imgSrc = item.image || (item.images && item.images[0]) || null;
+    if (!imgSrc) return;
     setModelReady(false);
+    setError(null);
     try {
       if (modelBlobUrlRef.current) {
         URL.revokeObjectURL(modelBlobUrlRef.current);
       }
       const allImages = item.images && item.images.length > 0 ? item.images : undefined;
-      const url = await generatePlateGLBFromUrl(item.image, allImages);
+      console.log("[Suvai] Generating GLB...", { hasAllImages: !!allImages, count: allImages?.length });
+      const url = await generatePlateGLBFromUrl(imgSrc, allImages);
+      console.log("[Suvai] GLB generated, loading with Three.js...");
       modelBlobUrlRef.current = url;
 
       const loader = new GLTFLoader();
       loader.load(
         url,
         (gltf) => {
+          console.log("[Suvai] Model loaded successfully");
           const model = gltf.scene;
           model.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -91,13 +97,13 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         },
         undefined,
         (err) => {
-          console.error("GLTFLoader error:", err);
-          setError("Failed to load 3D model");
+          console.error("[Suvai] GLTFLoader error:", err);
+          setError("Failed to load 3D model. Try refreshing.");
         }
       );
     } catch (err) {
-      console.error("Model generation failed:", err);
-      setError(`Model failed: ${err}`);
+      console.error("[Suvai] Model generation failed:", err);
+      setError(`Model generation failed. Try refreshing.`);
     }
   }, []);
 
@@ -237,6 +243,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         setPlaced(false);
         setSurfaceFound(false);
         isPlacedRef.current = false;
+        hitCountRef.current = 0;
         hitTestSourceRef.current = null;
         sessionRef.current = null;
         reticleRef.current = null;
@@ -259,6 +266,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const p = pose.transform.position;
+              hitCountRef.current++;
 
               // Show reticle with smooth lerp
               if (reticleRef.current) {
@@ -272,10 +280,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
               // Save pose for deferred placement
               savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
-              setSurfaceFound(true);
+              if (!surfaceFound) setSurfaceFound(true);
 
-              // AUTO-PLACE: if model is ready, place immediately
-              if (foodModelRef.current) {
+              // AUTO-PLACE: wait for 15 stable frames + model ready
+              if (foodModelRef.current && hitCountRef.current > 15) {
                 const model = foodModelRef.current.clone();
                 model.position.set(p.x, p.y, p.z);
                 model.rotation.set(0, 0, 0);
@@ -371,7 +379,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {arActive && (
         <>
           {/* Loading state — shows until model is auto-placed */}
-          {!placed && (
+          {!placed && !error && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
@@ -386,6 +394,22 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
               <p className="text-white/50 text-[12px]">
                 {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
               </p>
+            </div>
+          )}
+
+          {/* Error during AR */}
+          {error && (
+            <div
+              className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
+              style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
+            >
+              <p className="text-red-400 text-[14px] font-medium text-center">{error}</p>
+              <button
+                onClick={() => { setError(null); if (currentItem) generateModel(currentItem, currentIndex); }}
+                className="mt-2 px-5 py-2 rounded-full bg-white/20 text-white text-[13px]"
+              >
+                Retry
+              </button>
             </div>
           )}
 

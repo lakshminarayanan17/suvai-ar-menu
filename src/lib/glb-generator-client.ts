@@ -16,8 +16,9 @@ interface Mesh {
 function loadImg(src: string): Promise<HTMLImageElement> {
   return new Promise((res, rej) => {
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => res(img);
-    img.onerror = rej;
+    img.onerror = () => rej(new Error(`Failed to load image: ${src.substring(0, 60)}...`));
     img.src = src;
   });
 }
@@ -34,6 +35,7 @@ function canvasToBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
 function prepareFoodImage(dataUrl: string, maxSize: number): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    img.crossOrigin = "anonymous";
     img.onload = () => {
       const canvas = document.createElement("canvas");
       let w = img.width, h = img.height;
