@@ -61,7 +61,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
   const isPlacedRef = useRef(false); // immediate flag for animation loop
-  const hitCountRef = useRef(0); // count stable hit test frames before auto-placing
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -103,7 +102,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       );
     } catch (err) {
       console.error("[Suvai] Model generation failed:", err);
-      setError(`Model generation failed. Try refreshing.`);
+      setError("Model generation failed. Try refreshing.");
     }
   }, []);
 
@@ -140,17 +139,26 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
     setPlaced(true);
+    console.log("[Suvai] Model placed at", p);
   }, []);
 
-  // Deferred placement: model just loaded + we have a saved surface pose → place now
+  // AUTO-PLACE: when both surface found AND model ready, place automatically
+  // This runs outside the animation loop (React effect) for reliability
   useEffect(() => {
-    if (!modelReady || !arActive) return;
+    if (!modelReady || !arActive || !surfaceFound) return;
     if (!foodModelRef.current || !sceneRef.current) return;
 
     if (!placed && savedPoseRef.current) {
-      placeModel();
+      // Small delay to let reticle settle on a stable surface position
+      const timer = setTimeout(() => {
+        if (!isPlacedRef.current && savedPoseRef.current) {
+          console.log("[Suvai] Auto-placing model...");
+          placeModel();
+        }
+      }, 500);
+      return () => clearTimeout(timer);
     } else if (placed && placedModelRef.current) {
-      // Dish switch
+      // Dish switch — swap model at same position
       if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
       const oldPos = placedModelRef.current.position.clone();
       sceneRef.current.remove(placedModelRef.current);
@@ -162,7 +170,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       placedModelRef.current = newModel;
       placedModelIndexRef.current = loadedModelIndexRef.current;
     }
-  }, [modelReady, arActive, placed, placeModel]);
+  }, [modelReady, arActive, surfaceFound, placed, placeModel]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -243,7 +251,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         setPlaced(false);
         setSurfaceFound(false);
         isPlacedRef.current = false;
-        hitCountRef.current = 0;
         hitTestSourceRef.current = null;
         sessionRef.current = null;
         reticleRef.current = null;
@@ -253,55 +260,30 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
+      // Animation loop — ONLY tracks reticle. Placement handled by React effect.
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Hit test — find surface, show reticle, auto-place when model ready
-        if (!isPlacedRef.current && hitTestSourceRef.current) {
+        // Track reticle on surface (stops immediately when placed)
+        if (!isPlacedRef.current && hitTestSourceRef.current && reticleRef.current) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const p = pose.transform.position;
-              hitCountRef.current++;
-
-              // Show reticle with smooth lerp
-              if (reticleRef.current) {
-                reticleRef.current.visible = true;
-                const lerp = 0.15;
-                const cur = reticleRef.current.position;
-                cur.x += (p.x - cur.x) * lerp;
-                cur.y += (p.y - cur.y) * lerp;
-                cur.z += (p.z - cur.z) * lerp;
-              }
-
-              // Save pose for deferred placement
-              savedPoseRef.current = { x: p.x, y: p.y, z: p.z };
-              if (!surfaceFound) setSurfaceFound(true);
-
-              // AUTO-PLACE: wait for 15 stable frames + model ready
-              if (foodModelRef.current && hitCountRef.current > 15) {
-                const model = foodModelRef.current.clone();
-                model.position.set(p.x, p.y, p.z);
-                model.rotation.set(0, 0, 0);
-
-                // Remove reticle
-                isPlacedRef.current = true;
-                hitTestSourceRef.current = null;
-                if (reticleRef.current) {
-                  reticleRef.current.visible = false;
-                  scene.remove(reticleRef.current);
-                  reticleRef.current = null;
-                }
-
-                scene.add(model);
-                placedModelRef.current = model;
-                placedModelIndexRef.current = loadedModelIndexRef.current;
-                setPlaced(true);
-              }
+              reticleRef.current.visible = true;
+              // Smooth lerp for uniform movement (no jitter)
+              const lerp = 0.15;
+              const cur = reticleRef.current.position;
+              cur.x += (p.x - cur.x) * lerp;
+              cur.y += (p.y - cur.y) * lerp;
+              cur.z += (p.z - cur.z) * lerp;
+              reticleRef.current.updateMatrixWorld(true);
+              savedPoseRef.current = { x: cur.x, y: cur.y, z: cur.z };
+              setSurfaceFound(true);
             }
           }
         }
@@ -378,7 +360,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Loading state — shows until model is auto-placed */}
+          {/* Loading state */}
           {!placed && !error && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
