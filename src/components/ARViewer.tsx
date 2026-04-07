@@ -61,6 +61,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
   const isPlacedRef = useRef(false); // immediate flag for animation loop
+  const autoPlaceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -142,35 +143,22 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     console.log("[Suvai] Model placed at", p);
   }, []);
 
-  // AUTO-PLACE: when both surface found AND model ready, place automatically
-  // This runs outside the animation loop (React effect) for reliability
+  // Deferred dish switch: when model changes while already placed
   useEffect(() => {
-    if (!modelReady || !arActive || !surfaceFound) return;
-    if (!foodModelRef.current || !sceneRef.current) return;
+    if (!modelReady || !arActive || !placed) return;
+    if (!foodModelRef.current || !sceneRef.current || !placedModelRef.current) return;
+    if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
 
-    if (!placed && savedPoseRef.current) {
-      // Small delay to let reticle settle on a stable surface position
-      const timer = setTimeout(() => {
-        if (!isPlacedRef.current && savedPoseRef.current) {
-          console.log("[Suvai] Auto-placing model...");
-          placeModel();
-        }
-      }, 500);
-      return () => clearTimeout(timer);
-    } else if (placed && placedModelRef.current) {
-      // Dish switch — swap model at same position
-      if (loadedModelIndexRef.current === placedModelIndexRef.current) return;
-      const oldPos = placedModelRef.current.position.clone();
-      sceneRef.current.remove(placedModelRef.current);
+    const oldPos = placedModelRef.current.position.clone();
+    sceneRef.current.remove(placedModelRef.current);
 
-      const newModel = foodModelRef.current.clone();
-      newModel.position.copy(oldPos);
-      newModel.rotation.set(0, 0, 0);
-      sceneRef.current.add(newModel);
-      placedModelRef.current = newModel;
-      placedModelIndexRef.current = loadedModelIndexRef.current;
-    }
-  }, [modelReady, arActive, surfaceFound, placed, placeModel]);
+    const newModel = foodModelRef.current.clone();
+    newModel.position.copy(oldPos);
+    newModel.rotation.set(0, 0, 0);
+    sceneRef.current.add(newModel);
+    placedModelRef.current = newModel;
+    placedModelIndexRef.current = loadedModelIndexRef.current;
+  }, [modelReady, arActive, placed]);
 
   // Start AR session
   const startAR = useCallback(async () => {
@@ -246,7 +234,50 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
       hitTestSourceRef.current = hitTestSource ?? null;
 
+      // AUTO-PLACE: poll every 300ms using refs only (avoids XR→React state timing issues)
+      autoPlaceTimerRef.current = setInterval(() => {
+        if (isPlacedRef.current) {
+          if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
+          autoPlaceTimerRef.current = null;
+          return;
+        }
+        // Check refs directly — no React state dependency
+        if (foodModelRef.current && savedPoseRef.current && sceneRef.current) {
+          console.log("[Suvai] Auto-placing model via poll...");
+          // Place inline using refs (placeModel uses useCallback which may have stale closure)
+          const model = foodModelRef.current.clone();
+          const p = savedPoseRef.current;
+          model.position.set(p.x, p.y, p.z);
+          model.rotation.set(0, 0, 0);
+
+          if (placedModelRef.current) {
+            sceneRef.current!.remove(placedModelRef.current);
+          }
+
+          isPlacedRef.current = true;
+          hitTestSourceRef.current = null;
+          if (reticleRef.current) {
+            reticleRef.current.visible = false;
+            sceneRef.current!.remove(reticleRef.current);
+            reticleRef.current = null;
+          }
+
+          sceneRef.current!.add(model);
+          placedModelRef.current = model;
+          placedModelIndexRef.current = loadedModelIndexRef.current;
+          setPlaced(true);
+          setSurfaceFound(true);
+
+          if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
+          autoPlaceTimerRef.current = null;
+        }
+      }, 300);
+
       session.addEventListener("end", () => {
+        if (autoPlaceTimerRef.current) {
+          clearInterval(autoPlaceTimerRef.current);
+          autoPlaceTimerRef.current = null;
+        }
         setArActive(false);
         setPlaced(false);
         setSurfaceFound(false);
@@ -304,6 +335,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   // Cleanup
   useEffect(() => {
     return () => {
+      if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
       sessionRef.current?.end().catch(() => {});
       modelBlobUrlRef.current && URL.revokeObjectURL(modelBlobUrlRef.current);
       rendererRef.current?.dispose();
