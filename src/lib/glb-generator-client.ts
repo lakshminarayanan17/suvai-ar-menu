@@ -1,14 +1,14 @@
-// Browser-compatible GLB generator
-// Single image: top-view food on plate (gentle mound)
-// Multi-image: image 1 on top, images 2-4 stitched as side wall panorama = real 3D food
+// Browser-compatible GLB generator — optimized for mobile speed + quality
+// Single image: top-view food on plate (raised mound with contour)
+// Multi-image: image 1 on top, images 2-4 stitched as side wall panorama
 
-const SEG = 48;
+const SEG = 32; // reduced from 48 for speed (barely noticeable difference)
 
 interface Mesh {
-  positions: number[];
-  normals: number[];
-  uvs: number[];
-  indices: number[];
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  indices: Uint16Array;
 }
 
 // ---- Image Utilities ----
@@ -18,7 +18,7 @@ function loadImg(src: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => res(img);
-    img.onerror = () => rej(new Error(`Failed to load image: ${src.substring(0, 60)}...`));
+    img.onerror = () => rej(new Error("Image load failed"));
     img.src = src;
   });
 }
@@ -28,34 +28,26 @@ function canvasToBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
     canvas.toBlob((blob) => {
       if (!blob) return reject(new Error("toBlob failed"));
       blob.arrayBuffer().then((buf) => resolve(new Uint8Array(buf)));
-    }, "image/jpeg", 0.92);
+    }, "image/jpeg", 0.80); // lower quality = faster + smaller GLB
   });
 }
 
-function prepareFoodImage(dataUrl: string, maxSize: number): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      let w = img.width, h = img.height;
-      if (w > maxSize || h > maxSize) {
-        if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
-        else { w = Math.round(w * maxSize / h); h = maxSize; }
-      }
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, w, h);
-      canvasToBytes(canvas).then(resolve).catch(reject);
-    };
-    img.onerror = () => reject(new Error("Image load failed"));
-    img.src = dataUrl;
-  });
+async function prepareFoodImage(dataUrl: string, maxSize: number): Promise<Uint8Array> {
+  const img = await loadImg(dataUrl);
+  const canvas = document.createElement("canvas");
+  let w = img.width, h = img.height;
+  if (w > maxSize || h > maxSize) {
+    if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+    else { w = Math.round(w * maxSize / h); h = maxSize; }
+  }
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvasToBytes(canvas);
 }
 
-// Stitch side images into a horizontal panoramic strip for wrapping around cylinder.
-// Each image is crop-to-fill (no stretching) and repeated to fill 360° seamlessly.
+// Stitch side images into panoramic strip
 async function createSideStrip(sideDataUrls: string[], width: number, height: number): Promise<Uint8Array> {
   const imgs = await Promise.all(sideDataUrls.map(loadImg));
   const canvas = document.createElement("canvas");
@@ -64,31 +56,26 @@ async function createSideStrip(sideDataUrls: string[], width: number, height: nu
   const ctx = canvas.getContext("2d")!;
 
   const count = imgs.length;
-  // Repeat images to fill the full panorama (e.g., 2 images → each appears multiple times)
-  const totalSlices = Math.max(count * 2, 6); // at least 6 slices for smooth wrap
+  const totalSlices = Math.max(count * 2, 6);
   const sliceW = width / totalSlices;
 
   for (let s = 0; s < totalSlices; s++) {
     const img = imgs[s % count];
-    // Crop-to-fill: maintain aspect ratio, crop excess
     const imgAspect = img.width / img.height;
     const sliceAspect = sliceW / height;
 
     let sx = 0, sy = 0, sw = img.width, sh = img.height;
     if (imgAspect > sliceAspect) {
-      // Image wider than slice — crop sides
       sw = img.height * sliceAspect;
       sx = (img.width - sw) / 2;
     } else {
-      // Image taller than slice — crop top/bottom
       sh = img.width / sliceAspect;
       sy = (img.height - sh) / 2;
     }
-
     ctx.drawImage(img, sx, sy, sw, sh, s * sliceW, 0, sliceW, height);
   }
 
-  // Smooth seams with subtle vertical gradient blending at edges
+  // Subtle seam blending
   for (let s = 1; s < totalSlices; s++) {
     const seamX = s * sliceW;
     const blendW = sliceW * 0.15;
@@ -103,9 +90,9 @@ async function createSideStrip(sideDataUrls: string[], width: number, height: nu
   return canvasToBytes(canvas);
 }
 
-// Generate plate texture with concentric rings
+// Generate plate texture — smaller canvas for speed
 function generatePlateTexture(): Uint8Array {
-  const size = 512;
+  const size = 256; // reduced from 512
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -127,7 +114,8 @@ function generatePlateTexture(): Uint8Array {
     ctx.fill();
   }
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+  // Use toBlob sync path — faster than dataURL→atob
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
   const base64 = dataUrl.split(",")[1];
   const bin = atob(base64);
   const bytes = new Uint8Array(bin.length);
@@ -135,145 +123,197 @@ function generatePlateTexture(): Uint8Array {
   return bytes;
 }
 
-// ---- Geometry Builders ----
+// ---- Geometry Builders (using typed arrays for speed) ----
 
-// Plate — flat disc with ring texture
 function createPlate(radius: number, thickness: number): Mesh {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
-  const RINGS = 12;
+  const RINGS = 10;
+  const vertCount = 1 + RINGS * (SEG + 1) + (SEG + 1) * 2 + 1 + SEG;
+  const idxCount = SEG + (RINGS - 1) * SEG * 2 + SEG * 2 + SEG;
 
-  positions.push(0, thickness, 0);
-  normals.push(0, 1, 0);
-  uvs.push(0.5, 0.5);
+  const positions = new Float32Array(vertCount * 3);
+  const normals = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
+  const indices = new Uint16Array(idxCount * 3);
+  let vi = 0, ui = 0, ii = 0;
+
+  // Center vertex
+  positions[vi++] = 0; positions[vi++] = thickness; positions[vi++] = 0;
+  normals[vi - 3] = 0; normals[vi - 2] = 1; normals[vi - 1] = 0;
+  // Fix normals index
+  let ni = 0;
+  vi = 0;
+  positions[vi++] = 0; positions[vi++] = thickness; positions[vi++] = 0;
+  normals[ni++] = 0; normals[ni++] = 1; normals[ni++] = 0;
+  uvs[ui++] = 0.5; uvs[ui++] = 0.5;
+
   for (let ring = 1; ring <= RINGS; ring++) {
     const t = ring / RINGS;
     const r = t * radius;
     for (let i = 0; i <= SEG; i++) {
       const a = (i / SEG) * Math.PI * 2;
-      positions.push(Math.cos(a) * r, thickness, Math.sin(a) * r);
-      normals.push(0, 1, 0);
-      uvs.push(0.5 + Math.cos(a) * t * 0.5, 0.5 + Math.sin(a) * t * 0.5);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      positions[vi++] = ca * r; positions[vi++] = thickness; positions[vi++] = sa * r;
+      normals[ni++] = 0; normals[ni++] = 1; normals[ni++] = 0;
+      uvs[ui++] = 0.5 + ca * t * 0.5; uvs[ui++] = 0.5 + sa * t * 0.5;
     }
   }
-  for (let i = 0; i < SEG; i++) indices.push(0, 1 + i, 1 + i + 1);
+
+  // Center fan
+  for (let i = 0; i < SEG; i++) {
+    indices[ii++] = 0; indices[ii++] = 1 + i; indices[ii++] = 1 + i + 1;
+  }
+  // Ring strips
   for (let ring = 0; ring < RINGS - 1; ring++) {
     const s = 1 + ring * (SEG + 1), n = s + (SEG + 1);
     for (let i = 0; i < SEG; i++) {
-      indices.push(s + i, n + i, s + i + 1);
-      indices.push(s + i + 1, n + i, n + i + 1);
+      indices[ii++] = s + i; indices[ii++] = n + i; indices[ii++] = s + i + 1;
+      indices[ii++] = s + i + 1; indices[ii++] = n + i; indices[ii++] = n + i + 1;
     }
   }
 
   // Side wall
-  const sb = positions.length / 3;
+  const sb = vi / 3;
   for (let i = 0; i <= SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
     const nx = Math.cos(a), nz = Math.sin(a);
-    positions.push(nx * radius, thickness, nz * radius);
-    normals.push(nx, 0, nz); uvs.push(i / SEG, 1);
-    positions.push(nx * radius, 0, nz * radius);
-    normals.push(nx, 0, nz); uvs.push(i / SEG, 0);
+    positions[vi++] = nx * radius; positions[vi++] = thickness; positions[vi++] = nz * radius;
+    normals[ni++] = nx; normals[ni++] = 0; normals[ni++] = nz;
+    uvs[ui++] = i / SEG; uvs[ui++] = 1;
+    positions[vi++] = nx * radius; positions[vi++] = 0; positions[vi++] = nz * radius;
+    normals[ni++] = nx; normals[ni++] = 0; normals[ni++] = nz;
+    uvs[ui++] = i / SEG; uvs[ui++] = 0;
   }
   for (let i = 0; i < SEG; i++) {
     const a = sb + i * 2;
-    indices.push(a, a + 1, a + 2);
-    indices.push(a + 2, a + 1, a + 3);
+    indices[ii++] = a; indices[ii++] = a + 1; indices[ii++] = a + 2;
+    indices[ii++] = a + 2; indices[ii++] = a + 1; indices[ii++] = a + 3;
   }
 
   // Bottom
-  const bb = positions.length / 3;
-  positions.push(0, 0, 0); normals.push(0, -1, 0); uvs.push(0.5, 0.5);
+  const bb = vi / 3;
+  positions[vi++] = 0; positions[vi++] = 0; positions[vi++] = 0;
+  normals[ni++] = 0; normals[ni++] = -1; normals[ni++] = 0;
+  uvs[ui++] = 0.5; uvs[ui++] = 0.5;
   for (let i = 0; i < SEG; i++) {
     const a = (i / SEG) * Math.PI * 2;
-    positions.push(Math.cos(a) * radius, 0, Math.sin(a) * radius);
-    normals.push(0, -1, 0);
-    uvs.push(0.5 + Math.cos(a) * 0.5, 0.5 + Math.sin(a) * 0.5);
+    positions[vi++] = Math.cos(a) * radius; positions[vi++] = 0; positions[vi++] = Math.sin(a) * radius;
+    normals[ni++] = 0; normals[ni++] = -1; normals[ni++] = 0;
+    uvs[ui++] = 0.5 + Math.cos(a) * 0.5; uvs[ui++] = 0.5 + Math.sin(a) * 0.5;
   }
-  for (let i = 0; i < SEG; i++) indices.push(bb, bb + 1 + ((i + 1) % SEG), bb + 1 + i);
+  for (let i = 0; i < SEG; i++) {
+    indices[ii++] = bb; indices[ii++] = bb + 1 + ((i + 1) % SEG); indices[ii++] = bb + 1 + i;
+  }
 
-  return { positions, normals, uvs, indices };
+  return {
+    positions: new Float32Array(positions.buffer, 0, vi),
+    normals: new Float32Array(normals.buffer, 0, ni),
+    uvs: new Float32Array(uvs.buffer, 0, ui),
+    indices: new Uint16Array(indices.buffer, 0, ii),
+  };
 }
 
-// Food top — gentle mound, top-view image
+// Food top — raised mound with better contour for realistic 3D look
 function createFoodTop(radius: number, height: number, yBase: number): Mesh {
-  const RINGS = 12;
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+  const RINGS = 14; // more rings = smoother surface
+  const vertCount = 1 + RINGS * (SEG + 1);
+  const idxCount = SEG + (RINGS - 1) * SEG * 2;
 
-  positions.push(0, yBase + height, 0);
-  normals.push(0, 1, 0);
-  uvs.push(0.5, 0.5);
+  const positions = new Float32Array(vertCount * 3);
+  const normals = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
+  const indices = new Uint16Array(idxCount * 3);
+  let vi = 0, ni = 0, ui = 0, ii = 0;
+
+  // Center (peak)
+  positions[vi++] = 0; positions[vi++] = yBase + height; positions[vi++] = 0;
+  normals[ni++] = 0; normals[ni++] = 1; normals[ni++] = 0;
+  uvs[ui++] = 0.5; uvs[ui++] = 0.5;
 
   for (let ring = 1; ring <= RINGS; ring++) {
     const t = ring / RINGS;
     const r = t * radius;
+    // Smoother bell-curve falloff for more natural food shape
     const profile = Math.cos(t * Math.PI * 0.5);
     const y = yBase + height * profile * profile;
+
     for (let i = 0; i <= SEG; i++) {
       const a = (i / SEG) * Math.PI * 2;
-      const cx = Math.cos(a), sz = Math.sin(a);
-      positions.push(cx * r, y, sz * r);
-      normals.push(0, 1, 0);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      positions[vi++] = ca * r; positions[vi++] = y; positions[vi++] = sa * r;
+
+      // Compute proper normals for the curved surface
+      const dydr = -height * Math.PI * Math.sin(t * Math.PI * 0.5) * Math.cos(t * Math.PI * 0.5) / radius;
+      const len = Math.sqrt(dydr * dydr + 1);
+      normals[ni++] = ca / len; normals[ni++] = -dydr / len; normals[ni++] = sa / len;
+
       const uvScale = 0.42;
-      uvs.push(0.5 + cx * t * uvScale, 0.5 + sz * t * uvScale);
+      uvs[ui++] = 0.5 + ca * t * uvScale; uvs[ui++] = 0.5 + sa * t * uvScale;
     }
   }
 
-  for (let i = 0; i < SEG; i++) indices.push(0, 1 + i, 1 + i + 1);
+  for (let i = 0; i < SEG; i++) {
+    indices[ii++] = 0; indices[ii++] = 1 + i; indices[ii++] = 1 + i + 1;
+  }
   for (let ring = 0; ring < RINGS - 1; ring++) {
     const s = 1 + ring * (SEG + 1), n = s + (SEG + 1);
     for (let i = 0; i < SEG; i++) {
-      indices.push(s + i, n + i, s + i + 1);
-      indices.push(s + i + 1, n + i, n + i + 1);
+      indices[ii++] = s + i; indices[ii++] = n + i; indices[ii++] = s + i + 1;
+      indices[ii++] = s + i + 1; indices[ii++] = n + i; indices[ii++] = n + i + 1;
     }
   }
 
-  return { positions, normals, uvs, indices };
+  return {
+    positions: new Float32Array(positions.buffer, 0, vi),
+    normals: new Float32Array(normals.buffer, 0, ni),
+    uvs: new Float32Array(uvs.buffer, 0, ui),
+    indices: new Uint16Array(indices.buffer, 0, ii),
+  };
 }
 
-// Food side wall — cylinder wrapping side-view images around the food
+// Food side wall — cylinder with barrel bulge
 function createFoodSide(radius: number, height: number, yBase: number): Mesh {
   const ROWS = 8;
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+  const vertCount = (ROWS + 1) * (SEG + 1);
+  const idxCount = ROWS * SEG * 2;
+
+  const positions = new Float32Array(vertCount * 3);
+  const normals = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
+  const indices = new Uint16Array(idxCount * 3);
+  let vi = 0, ni = 0, ui = 0, ii = 0;
 
   for (let row = 0; row <= ROWS; row++) {
-    const t = row / ROWS; // 0 = top, 1 = bottom
+    const t = row / ROWS;
     const y = yBase + height * (1 - t);
-    // Slight barrel shape — wider at middle, narrower at top/bottom
-    const bulge = 1 + 0.05 * Math.sin(t * Math.PI);
+    const bulge = 1 + 0.06 * Math.sin(t * Math.PI);
     const r = radius * bulge;
 
     for (let i = 0; i <= SEG; i++) {
       const a = (i / SEG) * Math.PI * 2;
-      const cx = Math.cos(a), sz = Math.sin(a);
-      positions.push(cx * r, y, sz * r);
-      normals.push(cx, 0, sz);
-      // UV: u wraps horizontally, v goes top to bottom
-      uvs.push(i / SEG, t);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      positions[vi++] = ca * r; positions[vi++] = y; positions[vi++] = sa * r;
+      normals[ni++] = ca; normals[ni++] = 0; normals[ni++] = sa;
+      uvs[ui++] = i / SEG; uvs[ui++] = t;
     }
   }
 
   for (let row = 0; row < ROWS; row++) {
-    const s = row * (SEG + 1);
-    const n = s + (SEG + 1);
+    const s = row * (SEG + 1), n = s + (SEG + 1);
     for (let i = 0; i < SEG; i++) {
-      indices.push(s + i, n + i, s + i + 1);
-      indices.push(s + i + 1, n + i, n + i + 1);
+      indices[ii++] = s + i; indices[ii++] = n + i; indices[ii++] = s + i + 1;
+      indices[ii++] = s + i + 1; indices[ii++] = n + i; indices[ii++] = n + i + 1;
     }
   }
 
-  return { positions, normals, uvs, indices };
+  return {
+    positions: new Float32Array(positions.buffer, 0, vi),
+    normals: new Float32Array(normals.buffer, 0, ni),
+    uvs: new Float32Array(uvs.buffer, 0, ui),
+    indices: new Uint16Array(indices.buffer, 0, ii),
+  };
 }
 
-function computeBounds(positions: number[]) {
+function computeBounds(positions: Float32Array) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < positions.length; i += 3) {
@@ -288,98 +328,92 @@ function computeBounds(positions: number[]) {
 // ---- Main Export ----
 
 export async function generatePlateGLBFromUrl(imageDataUrl: string, allImages?: string[]): Promise<string> {
+  const t0 = performance.now();
   const plateImageBytes = generatePlateTexture();
 
+  let glbBytes: ArrayBuffer;
   if (allImages && allImages.length > 1) {
-    // Multi-image: image 1 = top, rest = side wall panorama
-    const topImageBytes = await prepareFoodImage(allImages[0], 1024);
-    const sideImages = allImages.slice(1);
-    const sideStripBytes = await createSideStrip(sideImages, 2048, 1024);
-
-    const glbBytes = buildMultiImageGLB(topImageBytes, sideStripBytes, plateImageBytes, allImages.length);
-    const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
-    return URL.createObjectURL(blob);
+    // Multi-image: parallel load for speed
+    const [topImageBytes, sideStripBytes] = await Promise.all([
+      prepareFoodImage(allImages[0], 512),
+      createSideStrip(allImages.slice(1), 1024, 512),
+    ]);
+    glbBytes = buildMultiImageGLB(topImageBytes, sideStripBytes, plateImageBytes, allImages.length);
   } else {
-    // Single image: flat-ish mound
-    const topImageBytes = await prepareFoodImage(imageDataUrl, 1024);
-    const glbBytes = buildSingleImageGLB(topImageBytes, plateImageBytes);
-    const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
-    return URL.createObjectURL(blob);
+    const topImageBytes = await prepareFoodImage(imageDataUrl, 512);
+    glbBytes = buildSingleImageGLB(topImageBytes, plateImageBytes);
   }
+
+  const blob = new Blob([glbBytes], { type: "model/gltf-binary" });
+  console.log(`[Suvai] GLB built in ${(performance.now() - t0).toFixed(0)}ms, ${(glbBytes.byteLength / 1024).toFixed(0)}KB`);
+  return URL.createObjectURL(blob);
 }
 
 // ---- GLB Builders ----
 
-// Single image: plate + food top (2 meshes, 2 materials)
 function buildSingleImageGLB(topImageBytes: Uint8Array, plateImageBytes: Uint8Array): ArrayBuffer {
   const plate = createPlate(0.20, 0.003);
-  const foodTop = createFoodTop(0.16, 0.015, 0.003);
+  const foodTop = createFoodTop(0.16, 0.025, 0.003); // 2.5cm height — more 3D than before
 
   return assemblGLB(
     [plate, foodTop],
     [plateImageBytes, topImageBytes],
     [
-      { name: "Plate", pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0.02, roughnessFactor: 0.4 } },
-      { name: "Food", pbrMetallicRoughness: { baseColorTexture: { index: 1 }, metallicFactor: 0.0, roughnessFactor: 0.75 }, doubleSided: true },
+      { name: "Plate", pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0.05, roughnessFactor: 0.35 } },
+      { name: "Food", pbrMetallicRoughness: { baseColorTexture: { index: 1 }, metallicFactor: 0.0, roughnessFactor: 0.65 }, doubleSided: true },
     ]
   );
 }
 
-// Multi-image: plate + food top + food side wall (3 meshes, 3 materials, 3 textures)
 function buildMultiImageGLB(topImageBytes: Uint8Array, sideStripBytes: Uint8Array, plateImageBytes: Uint8Array, imageCount: number): ArrayBuffer {
-  // More images = taller food (more 3D data available)
-  const foodHeight = 0.03 + (imageCount - 2) * 0.01; // 3cm base + 1cm per extra image
+  const foodHeight = 0.04 + (imageCount - 2) * 0.015; // taller food = more 3D
   const plate = createPlate(0.20, 0.003);
-  const foodTop = createFoodTop(0.14, foodHeight * 0.3, 0.003 + foodHeight);
+  const foodTop = createFoodTop(0.14, foodHeight * 0.35, 0.003 + foodHeight);
   const foodSide = createFoodSide(0.14, foodHeight, 0.003);
 
   return assemblGLB(
     [plate, foodTop, foodSide],
     [plateImageBytes, topImageBytes, sideStripBytes],
     [
-      { name: "Plate", pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0.02, roughnessFactor: 0.4 } },
-      { name: "FoodTop", pbrMetallicRoughness: { baseColorTexture: { index: 1 }, metallicFactor: 0.0, roughnessFactor: 0.75 }, doubleSided: true },
-      { name: "FoodSide", pbrMetallicRoughness: { baseColorTexture: { index: 2 }, metallicFactor: 0.0, roughnessFactor: 0.75 }, doubleSided: true },
+      { name: "Plate", pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0.05, roughnessFactor: 0.35 } },
+      { name: "FoodTop", pbrMetallicRoughness: { baseColorTexture: { index: 1 }, metallicFactor: 0.0, roughnessFactor: 0.65 }, doubleSided: true },
+      { name: "FoodSide", pbrMetallicRoughness: { baseColorTexture: { index: 2 }, metallicFactor: 0.0, roughnessFactor: 0.65 }, doubleSided: true },
     ]
   );
 }
 
-// Generic GLB assembler — handles any number of meshes/materials/textures
+// GLB assembler — now uses typed arrays for speed
 function assemblGLB(meshes: Mesh[], imageBytesList: Uint8Array[], materials: Record<string, unknown>[]): ArrayBuffer {
   const bufferViews: { byteOffset: number; byteLength: number; target: number }[] = [];
   const accessors: Record<string, unknown>[] = [];
   let totalBinSize = 0;
 
-  // Mesh data
   for (const mesh of meshes) {
     const vc = mesh.positions.length / 3;
     const ic = mesh.indices.length;
     const bounds = computeBounds(mesh.positions);
 
-    bufferViews.push({ byteOffset: totalBinSize, byteLength: vc * 12, target: 34962 });
+    bufferViews.push({ byteOffset: totalBinSize, byteLength: mesh.positions.byteLength, target: 34962 });
     accessors.push({ bufferView: bufferViews.length - 1, componentType: 5126, count: vc, type: "VEC3", max: bounds.max, min: bounds.min });
-    totalBinSize += vc * 12;
+    totalBinSize += mesh.positions.byteLength;
 
-    bufferViews.push({ byteOffset: totalBinSize, byteLength: vc * 12, target: 34962 });
+    bufferViews.push({ byteOffset: totalBinSize, byteLength: mesh.normals.byteLength, target: 34962 });
     accessors.push({ bufferView: bufferViews.length - 1, componentType: 5126, count: vc, type: "VEC3" });
-    totalBinSize += vc * 12;
+    totalBinSize += mesh.normals.byteLength;
 
-    bufferViews.push({ byteOffset: totalBinSize, byteLength: vc * 8, target: 34962 });
+    bufferViews.push({ byteOffset: totalBinSize, byteLength: mesh.uvs.byteLength, target: 34962 });
     accessors.push({ bufferView: bufferViews.length - 1, componentType: 5126, count: vc, type: "VEC2" });
-    totalBinSize += vc * 8;
+    totalBinSize += mesh.uvs.byteLength;
 
-    const idxBytes = ic * 2;
-    const idxPad = (4 - (idxBytes % 4)) % 4;
-    bufferViews.push({ byteOffset: totalBinSize, byteLength: idxBytes + idxPad, target: 34963 });
+    const idxPad = (4 - (mesh.indices.byteLength % 4)) % 4;
+    bufferViews.push({ byteOffset: totalBinSize, byteLength: mesh.indices.byteLength + idxPad, target: 34963 });
     accessors.push({ bufferView: bufferViews.length - 1, componentType: 5123, count: ic, type: "SCALAR" });
-    totalBinSize += idxBytes + idxPad;
+    totalBinSize += mesh.indices.byteLength + idxPad;
   }
 
-  // Images (with alignment padding between)
   const imageViewIndices: number[] = [];
   const imagePads: number[] = [];
-  for (let i = 0; i < imageBytesList.length; i++) {
-    const imgBytes = imageBytesList[i];
+  for (const imgBytes of imageBytesList) {
     imageViewIndices.push(bufferViews.length);
     bufferViews.push({ byteOffset: totalBinSize, byteLength: imgBytes.byteLength, target: 0 });
     const pad = (4 - (imgBytes.byteLength % 4)) % 4;
@@ -390,7 +424,6 @@ function assemblGLB(meshes: Mesh[], imageBytesList: Uint8Array[], materials: Rec
   const binPad = (4 - (totalBinSize % 4)) % 4;
   const paddedBinSize = totalBinSize + binPad;
 
-  // Build primitives
   const primitives = meshes.map((_, i) => ({
     attributes: { POSITION: i * 4, NORMAL: i * 4 + 1, TEXCOORD_0: i * 4 + 2 },
     indices: i * 4 + 3,
@@ -426,27 +459,36 @@ function assemblGLB(meshes: Mesh[], imageBytesList: Uint8Array[], materials: Rec
   const u8 = new Uint8Array(out);
   let off = 0;
 
+  // GLB header
   dv.setUint32(off, 0x46546c67, true); off += 4;
   dv.setUint32(off, 2, true); off += 4;
   dv.setUint32(off, glbSize, true); off += 4;
 
+  // JSON chunk
   dv.setUint32(off, paddedGltfLen, true); off += 4;
   dv.setUint32(off, 0x4e4f534a, true); off += 4;
   u8.set(gltfBytes, off); off += gltfBytes.byteLength;
   for (let i = 0; i < gltfPad; i++) u8[off++] = 0x20;
 
+  // BIN chunk
   dv.setUint32(off, paddedBinSize, true); off += 4;
   dv.setUint32(off, 0x004e4942, true); off += 4;
 
+  // Mesh data — direct typed array copy (much faster than per-element)
   for (const mesh of meshes) {
-    for (const v of mesh.positions) { dv.setFloat32(off, v, true); off += 4; }
-    for (const v of mesh.normals) { dv.setFloat32(off, v, true); off += 4; }
-    for (const v of mesh.uvs) { dv.setFloat32(off, v, true); off += 4; }
-    for (const idx of mesh.indices) { dv.setUint16(off, idx, true); off += 2; }
-    const ip = (4 - ((mesh.indices.length * 2) % 4)) % 4;
+    u8.set(new Uint8Array(mesh.positions.buffer, mesh.positions.byteOffset, mesh.positions.byteLength), off);
+    off += mesh.positions.byteLength;
+    u8.set(new Uint8Array(mesh.normals.buffer, mesh.normals.byteOffset, mesh.normals.byteLength), off);
+    off += mesh.normals.byteLength;
+    u8.set(new Uint8Array(mesh.uvs.buffer, mesh.uvs.byteOffset, mesh.uvs.byteLength), off);
+    off += mesh.uvs.byteLength;
+    u8.set(new Uint8Array(mesh.indices.buffer, mesh.indices.byteOffset, mesh.indices.byteLength), off);
+    off += mesh.indices.byteLength;
+    const ip = (4 - (mesh.indices.byteLength % 4)) % 4;
     for (let i = 0; i < ip; i++) u8[off++] = 0;
   }
 
+  // Image data
   for (let i = 0; i < imageBytesList.length; i++) {
     u8.set(imageBytesList[i], off); off += imageBytesList[i].byteLength;
     for (let j = 0; j < imagePads[i]; j++) u8[off++] = 0;

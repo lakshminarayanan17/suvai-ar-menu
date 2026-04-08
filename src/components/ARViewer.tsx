@@ -11,7 +11,7 @@ interface ARViewerProps {
   restaurantName: string;
 }
 
-// Simple reticle ring for visual feedback while scanning
+// Reticle circle — white ring for tap-to-place feedback
 function createReticle(): THREE.Group {
   const group = new THREE.Group();
   const ringGeo = new THREE.RingGeometry(0.08, 0.1, 48);
@@ -60,8 +60,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
-  const isPlacedRef = useRef(false); // immediate flag for animation loop
-  const autoPlaceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPlacedRef = useRef(false);
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -74,16 +73,15 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         URL.revokeObjectURL(modelBlobUrlRef.current);
       }
       const allImages = item.images && item.images.length > 0 ? item.images : undefined;
-      console.log("[Suvai] Generating GLB...", { hasAllImages: !!allImages, count: allImages?.length });
+      const t0 = performance.now();
       const url = await generatePlateGLBFromUrl(imgSrc, allImages);
-      console.log("[Suvai] GLB generated, loading with Three.js...");
       modelBlobUrlRef.current = url;
 
       const loader = new GLTFLoader();
       loader.load(
         url,
         (gltf) => {
-          console.log("[Suvai] Model loaded successfully");
+          console.log(`[Suvai] Model ready in ${(performance.now() - t0).toFixed(0)}ms`);
           const model = gltf.scene;
           model.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -114,7 +112,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     }
   }, [currentIndex, currentItem?.id, generateModel]);
 
-  // Place model at saved position
+  // Place model at reticle position — called on tap
   const placeModel = useCallback(() => {
     if (!foodModelRef.current || !sceneRef.current || !savedPoseRef.current) return;
 
@@ -127,7 +125,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       sceneRef.current.remove(placedModelRef.current);
     }
 
-    // IMMEDIATELY stop hit testing and hide reticle
+    // Stop hit testing and remove reticle circle
     isPlacedRef.current = true;
     hitTestSourceRef.current = null;
     if (reticleRef.current) {
@@ -140,10 +138,9 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
     setPlaced(true);
-    console.log("[Suvai] Model placed at", p);
   }, []);
 
-  // Deferred dish switch: when model changes while already placed
+  // Dish switch when navigating while placed
   useEffect(() => {
     if (!modelReady || !arActive || !placed) return;
     if (!foodModelRef.current || !sceneRef.current || !placedModelRef.current) return;
@@ -203,7 +200,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     const camera = new THREE.PerspectiveCamera(70, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.01, 20);
     cameraRef.current = camera;
 
-    // Lighting
+    // Lighting — warm and natural
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(1, 3, 2);
@@ -213,7 +210,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     scene.add(fillLight);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.8));
 
-    // Reticle for visual feedback
+    // Reticle circle
     const reticle = createReticle();
     scene.add(reticle);
     reticleRef.current = reticle;
@@ -234,50 +231,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       const hitTestSource = await session.requestHitTestSource!({ space: refSpace });
       hitTestSourceRef.current = hitTestSource ?? null;
 
-      // AUTO-PLACE: poll every 300ms using refs only (avoids XR→React state timing issues)
-      autoPlaceTimerRef.current = setInterval(() => {
-        if (isPlacedRef.current) {
-          if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
-          autoPlaceTimerRef.current = null;
-          return;
-        }
-        // Check refs directly — no React state dependency
-        if (foodModelRef.current && savedPoseRef.current && sceneRef.current) {
-          console.log("[Suvai] Auto-placing model via poll...");
-          // Place inline using refs (placeModel uses useCallback which may have stale closure)
-          const model = foodModelRef.current.clone();
-          const p = savedPoseRef.current;
-          model.position.set(p.x, p.y, p.z);
-          model.rotation.set(0, 0, 0);
-
-          if (placedModelRef.current) {
-            sceneRef.current!.remove(placedModelRef.current);
-          }
-
-          isPlacedRef.current = true;
-          hitTestSourceRef.current = null;
-          if (reticleRef.current) {
-            reticleRef.current.visible = false;
-            sceneRef.current!.remove(reticleRef.current);
-            reticleRef.current = null;
-          }
-
-          sceneRef.current!.add(model);
-          placedModelRef.current = model;
-          placedModelIndexRef.current = loadedModelIndexRef.current;
-          setPlaced(true);
-          setSurfaceFound(true);
-
-          if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
-          autoPlaceTimerRef.current = null;
-        }
-      }, 300);
-
       session.addEventListener("end", () => {
-        if (autoPlaceTimerRef.current) {
-          clearInterval(autoPlaceTimerRef.current);
-          autoPlaceTimerRef.current = null;
-        }
         setArActive(false);
         setPlaced(false);
         setSurfaceFound(false);
@@ -291,13 +245,13 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Animation loop — ONLY tracks reticle. Placement handled by React effect.
+      // Animation loop — reticle tracking + rotation only
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
         if (!refSpaceLocal) return;
 
-        // Track reticle on surface (stops immediately when placed)
+        // Track reticle on surface
         if (!isPlacedRef.current && hitTestSourceRef.current && reticleRef.current) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
@@ -306,7 +260,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
             if (pose) {
               const p = pose.transform.position;
               reticleRef.current.visible = true;
-              // Smooth lerp for uniform movement (no jitter)
               const lerp = 0.15;
               const cur = reticleRef.current.position;
               cur.x += (p.x - cur.x) * lerp;
@@ -335,7 +288,6 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   // Cleanup
   useEffect(() => {
     return () => {
-      if (autoPlaceTimerRef.current) clearInterval(autoPlaceTimerRef.current);
       sessionRef.current?.end().catch(() => {});
       modelBlobUrlRef.current && URL.revokeObjectURL(modelBlobUrlRef.current);
       rendererRef.current?.dispose();
@@ -392,8 +344,8 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       {/* AR UI overlay */}
       {arActive && (
         <>
-          {/* Loading state */}
-          {!placed && !error && (
+          {/* Loading — scanning for surface */}
+          {!placed && !(surfaceFound && modelReady) && !error && (
             <div
               className="absolute top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 z-[40] flex flex-col items-center gap-3 px-8 py-5 rounded-[20px]"
               style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
@@ -403,11 +355,26 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
                 <div className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-white animate-spin" />
               </div>
               <p className="text-white text-[14px] font-medium">
-                {!surfaceFound ? "Scanning your table..." : !modelReady ? "Marinating the flavours..." : "Plating your dish..."}
+                {!surfaceFound ? "Scanning your table..." : "Marinating the flavours..."}
               </p>
               <p className="text-white/50 text-[12px]">
                 {!surfaceFound ? "Move your phone slowly" : "Almost ready to serve"}
               </p>
+            </div>
+          )}
+
+          {/* Tap to place — full-screen tap zone with prompt */}
+          {!placed && surfaceFound && modelReady && (
+            <div
+              className="absolute inset-0 z-[35]"
+              onClick={() => placeModel()}
+            >
+              <div
+                className="absolute bottom-[120px] left-[50%] -translate-x-1/2 px-6 py-3 rounded-full"
+                style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}
+              >
+                <p className="text-white text-[14px] font-medium whitespace-nowrap">Tap the circle to place</p>
+              </div>
             </div>
           )}
 
