@@ -61,6 +61,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
   const loadedModelIndexRef = useRef<number>(-1);
   const placedModelIndexRef = useRef<number>(-1);
   const isPlacedRef = useRef(false);
+  const anchorRef = useRef<XRAnchor | null>(null); // XR anchor for stable placement
 
   // Generate GLB model for current item
   const generateModel = useCallback(async (item: MenuItem, index: number) => {
@@ -138,6 +139,21 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
     placedModelRef.current = model;
     placedModelIndexRef.current = loadedModelIndexRef.current;
     setPlaced(true);
+
+    // Create XR anchor for stable position (prevents drift when moving camera)
+    const session = sessionRef.current;
+    if (session) {
+      const getLastHit = (session as unknown as Record<string, unknown>)._lastHitRef as (() => XRHitTestResult | null) | undefined;
+      const lastHit = getLastHit?.();
+      if (lastHit && typeof lastHit.createAnchor === "function") {
+        lastHit.createAnchor().then((anchor: XRAnchor) => {
+          anchorRef.current = anchor;
+          console.log("[Suvai] Anchor created for stable placement");
+        }).catch(() => {
+          console.log("[Suvai] Anchor creation failed — using static position");
+        });
+      }
+    }
   }, []);
 
   // Dish switch when navigating while placed
@@ -232,6 +248,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
       hitTestSourceRef.current = hitTestSource ?? null;
 
       session.addEventListener("end", () => {
+        if (anchorRef.current) { anchorRef.current.delete(); anchorRef.current = null; }
         setArActive(false);
         setPlaced(false);
         setSurfaceFound(false);
@@ -245,7 +262,10 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
         rendererRef.current = null;
       });
 
-      // Animation loop — reticle tracking + rotation only
+      // Store the last hit test result for anchor creation
+      let lastHitTestResult: XRHitTestResult | null = null;
+
+      // Animation loop — reticle tracking + anchor-based position + rotation
       renderer.setAnimationLoop((_, frame) => {
         if (!frame) return;
         const refSpaceLocal = renderer.xr.getReferenceSpace();
@@ -256,6 +276,7 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           const hitResults = frame.getHitTestResults(hitTestSourceRef.current);
           if (hitResults.length > 0) {
             const hit = hitResults[0];
+            lastHitTestResult = hit;
             const pose = hit.getPose(refSpaceLocal);
             if (pose) {
               const p = pose.transform.position;
@@ -272,6 +293,15 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
           }
         }
 
+        // Update placed model position from anchor (prevents drift)
+        if (isPlacedRef.current && placedModelRef.current && anchorRef.current && refSpaceLocal) {
+          const anchorPose = frame.getPose(anchorRef.current.anchorSpace, refSpaceLocal);
+          if (anchorPose) {
+            const ap = anchorPose.transform.position;
+            placedModelRef.current.position.set(ap.x, ap.y, ap.z);
+          }
+        }
+
         // Slow rotation for placed model
         if (isPlacedRef.current && placedModelRef.current) {
           placedModelRef.current.rotateY(0.004);
@@ -279,6 +309,9 @@ export default function ARViewer({ menuItems, restaurantName }: ARViewerProps) {
 
         renderer.render(scene, camera);
       });
+
+      // Store lastHitTestResult reference for placeModel to create anchor
+      (session as unknown as Record<string, unknown>)._lastHitRef = () => lastHitTestResult;
     } catch (err) {
       console.error("WebXR session failed:", err);
       setError(`AR failed: ${err instanceof Error ? err.message : String(err)}`);
