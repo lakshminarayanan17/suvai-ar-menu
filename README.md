@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Suvai — AR 3D Menu
 
-## Getting Started
+Restaurant owners photograph a dish; customers scan a QR code and place a photoreal 3D
+model of it on their table in AR (Android Chrome and iPhone Safari).
 
-First, run the development server:
+- **Owner dashboard** — `/` — add up to 6 dishes with Front (required) / Back / Left / Right
+  photos. Each save kicks off 3D generation; the plate shows *Making 3D… → 3D ready*.
+- **Customer menu** — `/menu/{restaurantId}` — the QR target. A `<model-viewer>` stage with
+  *View on your table* (WebXR / Scene Viewer / Quick Look) and prev/next dish navigation.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Stack
+
+Next.js 16 (App Router) · React 19 · Tailwind v4 · `@google/model-viewer` · Vercel Blob
+
+## How 3D generation works
+
+```
+owner saves dish ──▶ POST /api/generate ──▶ 202 (status: queued)
+                                  └─ after(): photos ──▶ provider ──▶ GLB
+                                               normalize scale/origin ──▶ Blob ──▶ status: ready
+dashboard polls GET /api/restaurant/{id} every 5 s while anything is generating
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`src/lib/providers/` — pluggable generators, chosen by `MODEL_PROVIDER`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Provider | Cost | Notes |
+| --- | --- | --- |
+| `trellis` (default) | Free | Microsoft TRELLIS.2 Space on Hugging Face ZeroGPU (session pipeline: preprocess → image_to_3d → extract_glb). ~75 s GPU per dish, each step requests 120 s. Free HF token: 5 min/day ≈ 3 dishes; PRO 40 min/day. |
+| `hunyuan` | Free | Tencent Hunyuan3D-2 (single photo) / 2mv (multi-view) Gradio Spaces on Hugging Face ZeroGPU. One dish ≈ 135 s of GPU. Quota per HF account: 5 min/day free (≈2 dishes), 40 min/day PRO ($9/mo, ≈17 dishes). A token is required — anonymous quota is smaller than one dish. Hunyuan3D-2.1 (PBR) needs 270 s/run and is PRO-only: `HUNYUAN_SPACES=tencent/Hunyuan3D-2.1,tencent/Hunyuan3D-2`. |
+| `meshy` | Free tier (200 credits/mo ≈ 10 dishes), then paid | Set `MESHY_API_KEY`; PBR textures, multi-image support. |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Generated GLBs are rescaled to a 28 cm plate footprint with the base at y=0
+(`src/lib/glb-transform.ts`) so they land on the table at true size.
 
-## Learn More
+## Environment variables
 
-To learn more about Next.js, take a look at the following resources:
+```
+BLOB_READ_WRITE_TOKEN=   # Vercel Blob (auto-injected when the store is linked)
+HF_TOKEN=hf_...          # Hugging Face token — https://huggingface.co/settings/tokens (read scope)
+MODEL_PROVIDER=trellis   # or "hunyuan" / "meshy"
+MESHY_API_KEY=           # only for MODEL_PROVIDER=meshy
+HUNYUAN_SPACES=          # optional: comma-separated single-image Spaces to try, in order
+HUNYUAN_MV_SPACES=       # optional: same for multi-view
+TRELLIS_SPACE=           # optional: alternate TRELLIS.2 Space id (default microsoft/TRELLIS.2)
+TRELLIS_DECIMATION=80000 # optional: triangle budget per dish (file size); TRELLIS_TEXTURE_SIZE=2048
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Develop
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm install
+npm run dev        # http://localhost:3000
+npm run lint && npx tsc --noEmit
+```
 
-## Deploy on Vercel
+Blob storage needs the token locally (`npx vercel env pull .env.local`).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Data model
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+One JSON blob per restaurant (`suvai/restaurants/{id}.json`). Photos and models are
+separate blobs referenced by URL, so the customer page fetches a few KB, not megabytes.
+The server owns `menuItem.model`; owner saves are merged so an in-flight generation is
+never clobbered, and changing photos invalidates the model.
+
+## Known limits
+
+- One hard-coded restaurant (`theobroma-001`); no auth on the owner API.
+- Six dish slots.

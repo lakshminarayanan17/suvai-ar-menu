@@ -3,47 +3,25 @@
 import { useEffect, useRef, useState } from "react";
 import BottomSheet from "./BottomSheet";
 import QRCode from "qrcode";
-import { forceSyncToServer } from "@/lib/store";
 
 interface QRSheetProps {
   isOpen: boolean;
   onClose: () => void;
   restaurantId: string;
+  readyCount: number;
+  totalCount: number;
 }
 
-export default function QRSheet({ isOpen, onClose, restaurantId }: QRSheetProps) {
+export default function QRSheet({ isOpen, onClose, restaurantId, readyCount, totalCount }: QRSheetProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
-  const [syncing, setSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<"idle" | "success" | "failed">("idle");
+  const menuUrl = typeof window !== "undefined" ? `${window.location.origin}/menu/${restaurantId}` : "";
 
   useEffect(() => {
-    if (isOpen) {
-      // Force sync to server when QR sheet opens
-      setSyncing(true);
-      setSyncStatus("idle");
-      forceSyncToServer().then((ok) => {
-        setSyncing(false);
-        setSyncStatus(ok ? "success" : "failed");
-      });
-
-      if (canvasRef.current) {
-        const menuUrl = `${window.location.origin}/menu/${restaurantId}`;
-        QRCode.toCanvas(canvasRef.current, menuUrl, {
-          width: 168,
-          margin: 2,
-          color: {
-            dark: "#000000",
-            light: "#ffffff",
-          },
-        });
-        QRCode.toDataURL(menuUrl, {
-          width: 400,
-          margin: 2,
-        }).then((url) => setQrDataUrl(url));
-      }
-    }
-  }, [isOpen, restaurantId]);
+    if (!isOpen || !canvasRef.current || !menuUrl) return;
+    QRCode.toCanvas(canvasRef.current, menuUrl, { width: 168, margin: 2, color: { dark: "#000000", light: "#ffffff" } });
+    QRCode.toDataURL(menuUrl, { width: 400, margin: 2 }).then(setQrDataUrl);
+  }, [isOpen, menuUrl]);
 
   const handleDownload = () => {
     if (!qrDataUrl) return;
@@ -56,27 +34,18 @@ export default function QRSheet({ isOpen, onClose, restaurantId }: QRSheetProps)
   return (
     <BottomSheet isOpen={isOpen} onClose={onClose}>
       <div className="p-[16px] flex flex-col items-center">
-        {/* Sync status */}
-        {syncing && (
-          <p className="text-[13px] text-gray-500 mt-2">Syncing menu to server...</p>
-        )}
-        {syncStatus === "success" && (
-          <p className="text-[13px] text-green-600 mt-2">Menu synced! QR is ready to share.</p>
-        )}
-        {syncStatus === "failed" && (
-          <p className="text-[13px] text-red-500 mt-2">Sync failed. Menu may not load on other devices.</p>
-        )}
-
-        {/* QR Code */}
-        <div className="mt-[24px] mb-[43px]">
+        <p className="text-[13px] text-gray-500 mt-2 text-center">
+          {totalCount === 0
+            ? "Add dishes first — the QR will show them as they're ready."
+            : `${readyCount} of ${totalCount} dishes have a 3D model.`}
+        </p>
+        <div className="mt-[20px] mb-[12px]">
           <canvas ref={canvasRef} className="rounded-[8px]" />
         </div>
-
-        {/* Download button */}
-        <button
-          onClick={handleDownload}
-          className="w-full h-[56px] bg-[#060606] rounded-[17px] flex items-center justify-center"
-        >
+        <a href={menuUrl} target="_blank" rel="noreferrer" className="text-[12px] text-[#595959] underline mb-[28px] break-all text-center">
+          {menuUrl}
+        </a>
+        <button onClick={handleDownload} className="w-full h-[56px] bg-[#060606] rounded-[17px] flex items-center justify-center">
           <span className="text-white text-[18px] font-medium">Download QR</span>
         </button>
       </div>
